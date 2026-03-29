@@ -587,6 +587,11 @@ type Config struct {
 	// Rotation is set. Safe for concurrent use.
 	Sessions *SessionManager
 
+	// H2Padding, when non-nil, pads application data TLS records to
+	// sizes matching typical HTTP/2 frames. This makes the record-size
+	// distribution indistinguishable from real HTTP/2 traffic.
+	H2Padding *H2Padder
+
 	LimitFallbackUpload   LimitFallback
 	LimitFallbackDownload LimitFallback
 

@@ -189,6 +189,10 @@ type halfConn struct {
 
 	level         QUICEncryptionLevel // current QUIC encryption level
 	trafficSecret []byte              // current TLS 1.3 traffic secret
+
+	// h2Padder, when non-nil, pads application data records to match
+	// typical HTTP/2 frame sizes, defeating record-size DPI analysis.
+	h2Padder *H2Padder
 }
 
 type permanentError struct {
@@ -555,6 +559,19 @@ func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader) ([]byte, err
 				}
 				record = append(record, empty[:padding]...)
 			}
+
+			// H2 padding: for application data records, pad to match
+			// typical HTTP/2 frame sizes. TLS 1.3 allows zero-byte
+			// padding after the ContentType byte (RFC 8446 §5.4).
+			if hc.h2Padder != nil && recordType(record[0]) == recordTypeApplicationData {
+				// payload length = current record minus header, minus 1 (ContentType byte)
+				plainLen := len(record) - recordHeaderLen
+				h2pad := hc.h2Padder.PaddingBytes(plainLen)
+				if h2pad > 0 && h2pad <= len(empty) {
+					record = append(record, empty[:h2pad]...)
+				}
+			}
+
 			record[0] = byte(recordTypeApplicationData)
 
 			n := len(record) + c.Overhead() - recordHeaderLen

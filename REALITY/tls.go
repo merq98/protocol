@@ -569,6 +569,10 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 					hs.c.MaxUselessRecords = maxUseless.(int)
 				}
 			}
+			// Enable H2 padding for application data if configured
+			if config.H2Padding != nil {
+				hs.c.out.h2Padder = config.H2Padding
+			}
 			hs.c.isHandshakeComplete.Store(true)
 			break
 		}

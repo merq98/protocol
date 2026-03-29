@@ -11,7 +11,7 @@
 | 3 | Мульти-SNI на одном сервере | Паттерн одного клиента | ✅ Готово |
 | 4 | Pre-built mode (кэш ответов target'а) | Active probing + timing | ✅ Готово |
 | 5 | Короткие ротируемые соединения | Статистика потоков | ✅ Готово |
-| 6 | Padding до типичных размеров HTTP/2 | Статистика потоков | ⬜ Не начато |
+| 6 | Padding до типичных размеров HTTP/2 | Статистика потоков | ✅ Готово |
 | 7 | Timing normalization | Active probing | ⬜ Не начато |
 | 8 | CDN relay (Cloudflare Workers) | Блокировка IP | ⬜ Не начато |
 | 9 | OTA fingerprint update для uTLS | uTLS fingerprint | ⬜ Не начато |
