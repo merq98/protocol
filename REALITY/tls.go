@@ -597,6 +597,19 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 		fmt.Printf("REALITY remoteAddr: %v\ths.c.isHandshakeComplete.Load(): %v\n", remoteAddr, hs.c.isHandshakeComplete.Load())
 	}
 	if hs.c.isHandshakeComplete.Load() {
+		// If rotation is enabled, wrap the connection for lifecycle tracking
+		// and bind it to a session keyed by the client's ShortId.
+		if config.Rotation != nil {
+			if config.Sessions == nil {
+				config.Sessions = NewSessionManager(*config.Rotation)
+			}
+			sessionID := fmt.Sprintf("%x", hs.c.ClientShortId)
+			sess, isNew := config.Sessions.Bind(sessionID, hs.c, nil)
+			if config.Show {
+				fmt.Printf("REALITY remoteAddr: %v\tsession: %v\tnew: %v\tactive_conns: %v\n",
+					remoteAddr, sessionID, isNew, sess.ActiveConns())
+			}
+		}
 		return hs.c, nil
 	}
 

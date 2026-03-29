@@ -576,6 +576,17 @@ type Config struct {
 	// doubling that DPI can detect via active probing.
 	Prebuilt *PrebuiltCache
 
+	// Rotation enables short-lived connection rotation. When set, each
+	// authenticated REALITY connection is wrapped in a RotatedConn that
+	// tracks age and bytes transferred. The SessionManager groups
+	// multiple rotated connections from the same client into one session.
+	Rotation *RotationPolicy
+
+	// Sessions is the server-side session manager that binds rotated
+	// connections from the same client. Automatically created when
+	// Rotation is set. Safe for concurrent use.
+	Sessions *SessionManager
+
 	LimitFallbackUpload   LimitFallback
 	LimitFallbackDownload LimitFallback
 
