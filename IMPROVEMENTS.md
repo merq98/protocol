@@ -12,8 +12,8 @@
 | 4 | Pre-built mode (кэш ответов target'а) | Active probing + timing | ✅ Готово |
 | 5 | Короткие ротируемые соединения | Статистика потоков | ✅ Готово |
 | 6 | Padding до типичных размеров HTTP/2 | Статистика потоков | ✅ Готово |
-| 7 | Timing normalization | Active probing | ⬜ Не начато |
-| 8 | CDN relay (Cloudflare Workers) | Блокировка IP | ⬜ Не начато |
+| 7 | Timing normalization | Active probing | ✅ Готово |
+| 8 | CDN relay (Cloudflare Workers) | Блокировка IP | ✅ Готово |
 | 9 | OTA fingerprint update для uTLS | uTLS fingerprint | ⬜ Не начато |
 
 ---
@@ -87,11 +87,19 @@
 
 ---
 
-## 8. CDN relay (Cloudflare Workers)
+## 8. CDN relay (Cloudflare Workers) ✅ Готово
 
 **Вектор атаки:** Блокировка IP VPS.
 
 **Решение:** Cloudflare Workers как relay-слой. Трафик идёт к IP Cloudflare.
+
+**Реализация:**
+- `worker/relay.js` — Worker: WS↔TCP relay через `cloudflare:sockets` connect()
+- `worker/wrangler.toml` — конфиг деплоя, `ORIGIN` = адрес VPS
+- `ws_conn.go` — `WSConn` (реализует `net.Conn` поверх WebSocket)
+- `DialWS(ctx, url)` — клиент подключается к relay, получает обычный `net.Conn`
+- Cloudflare не видит содержимое: REALITY handshake проходит внутри WS-туннеля
+- Free plan: 100k req/day, WS-сообщения после upgrade не тарифицируются
 
 ---
 
