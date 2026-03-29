@@ -73,11 +73,17 @@
 
 ---
 
-## 7. Timing normalization
+## 7. Timing normalization ✅ Готово
 
 **Вектор атаки:** Timing авторизованных vs не-авторизованных клиентов отличается.
 
 **Решение:** Нормализация задержек: буферизация + выравнивание RTT.
+
+**Реализация:**
+- `timing_normalizer.go` — `TimingNormalizer` с EMA target-RTT, адаптивный delay + jitter
+- Goroutine 2 в `Server()` измеряет RTT до target'а (первый `target.Read()`)
+- После `hs.readClientFinished()` (auth path) — `Sleep()` нормализует время до target-RTT
+- Jitter ±15 % для маскировки фиксированных задержек
 
 ---
 

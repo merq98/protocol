@@ -592,6 +592,12 @@ type Config struct {
 	// distribution indistinguishable from real HTTP/2 traffic.
 	H2Padding *H2Padder
 
+	// Timing, when non-nil, normalizes the timing of handshake
+	// responses so that authenticated (locally handled) connections
+	// are indistinguishable from non-authenticated (proxied) ones
+	// from a DPI timing-analysis perspective.
+	Timing *TimingNormalizer
+
 	LimitFallbackUpload   LimitFallback
 	LimitFallbackDownload LimitFallback
 

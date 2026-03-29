@@ -427,6 +427,11 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 			}
 		}
 
+		// Track when we start waiting for target data — the first
+		// successful read gives us the target RTT estimate.
+		targetReadStart := time.Now()
+		var targetFirstResponse time.Time
+
 	f:
 		for {
 			// If prebuilt data was loaded, process it on the first pass
@@ -444,6 +449,13 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 						return
 					}
 					continue
+				}
+				if targetFirstResponse.IsZero() {
+					targetFirstResponse = time.Now()
+					// Feed the timing normalizer with the target RTT
+					if config.Timing != nil {
+						config.Timing.RecordTargetRTT(targetFirstResponse.Sub(targetReadStart))
+					}
 				}
 				mutex.Lock()
 				s2cSaved = append(s2cSaved, buf[:n]...)
@@ -534,6 +546,13 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 			}
 			if err != nil {
 				break
+			}
+			// Timing normalization: delay the auth path so the total
+			// time from goroutine-2 start matches a typical target RTT.
+			// This masks the difference between locally-generated and
+			// proxied handshakes from DPI timing analysis.
+			if config.Timing != nil {
+				config.Timing.Sleep(time.Since(targetReadStart))
 			}
 			for {
 				key := effectiveDest + " " + hs.clientHello.serverName
