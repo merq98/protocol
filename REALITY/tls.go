@@ -65,6 +65,12 @@ type MirrorConn struct {
 	*sync.Mutex
 	net.Conn
 	Target net.Conn
+
+	// Multi-SNI support: when targetPending is true, writes to Target are
+	// buffered instead of sent. Once ReplaceTarget is called, the buffer
+	// is flushed to the new target.
+	targetPending bool
+	pendingBuf    []byte
 }
 
 func (c *MirrorConn) Read(b []byte) (int, error) {
@@ -73,12 +79,42 @@ func (c *MirrorConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	c.Lock() // calling c.Lock() before c.Target.Write(), to make sure that this goroutine has the priority to make the next move
 	if n != 0 {
-		c.Target.Write(b[:n])
+		if c.targetPending {
+			c.pendingBuf = append(c.pendingBuf, b[:n]...)
+		} else {
+			c.Target.Write(b[:n])
+		}
 	}
 	if err != nil {
-		c.Target.Close()
+		if !c.targetPending {
+			c.Target.Close()
+		}
 	}
 	return n, err
+}
+
+// ReplaceTarget replaces the target connection and flushes any buffered data.
+// Must be called while the mutex is held.
+func (c *MirrorConn) ReplaceTarget(newTarget net.Conn) {
+	if c.targetPending {
+		c.Target.Close()
+	}
+	c.Target = newTarget
+	c.targetPending = false
+	if len(c.pendingBuf) > 0 {
+		c.Target.Write(c.pendingBuf)
+		c.pendingBuf = nil
+	}
+}
+
+// FinalizePending stops buffering and uses the current Target as-is,
+// flushing any pending data. Must be called while the mutex is held.
+func (c *MirrorConn) FinalizePending() {
+	c.targetPending = false
+	if len(c.pendingBuf) > 0 {
+		c.Target.Write(c.pendingBuf)
+		c.pendingBuf = nil
+	}
 }
 
 func (c *MirrorConn) Write(b []byte) (int, error) {
@@ -166,17 +202,24 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 	}
 
 	// Resolve the effective dest and serverNames for this connection.
-	// If a TargetPool is configured, pick a target (random rotation);
-	// otherwise fall back to the single Dest / ServerNames from config.
+	// Multi-SNI mode: if TargetPool is configured, we accept ALL SNIs from the pool
+	// initially. After reading ClientHello, we re-dial to the correct target dest
+	// based on the actual SNI from the client. This makes the server look like a
+	// CDN/reverse-proxy that hosts many domains.
 	effectiveDest := config.Dest
 	effectiveServerNames := config.ServerNames
-	if config.Targets != nil && config.Targets.Len() > 0 {
+	multiSNI := config.Targets != nil && config.Targets.Len() > 0
+
+	if multiSNI {
+		// Accept all SNIs from the pool
+		effectiveServerNames = config.Targets.AllServerNames()
+		// Pick a random initial target for the first dial (needed for MirrorConn
+		// to start forwarding immediately). Will be replaced after SNI is known.
 		picked := config.Targets.PickRandom()
 		if picked != nil {
 			effectiveDest = picked.Dest
-			effectiveServerNames = picked.ServerNames
 			if config.Show {
-				fmt.Printf("REALITY remoteAddr: %v\trotated target: %v\n", remoteAddr, effectiveDest)
+				fmt.Printf("REALITY remoteAddr: %v\tinitial target (multi-SNI): %v\n", remoteAddr, effectiveDest)
 			}
 		}
 	}
@@ -206,9 +249,10 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 	hs := serverHandshakeStateTLS13{
 		c: &Conn{
 			conn: &MirrorConn{
-				Mutex:  mutex,
-				Conn:   conn,
-				Target: target,
+				Mutex:         mutex,
+				Conn:          conn,
+				Target:        target,
+				targetPending: multiSNI,
 			},
 			config: config,
 		},
@@ -217,6 +261,13 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 
 	copying := false
 
+	// In multi-SNI mode, goroutine 2 (target→client) must wait until
+	// the correct target is dialed and the ClientHello is flushed to it.
+	var targetReady chan struct{}
+	if multiSNI {
+		targetReady = make(chan struct{})
+	}
+
 	waitGroup := new(sync.WaitGroup)
 	waitGroup.Add(2)
 
@@ -224,6 +275,42 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 		for {
 			mutex.Lock()
 			hs.clientHello, _, err = hs.c.readClientHello(context.Background()) // TODO: Change some rules in this function.
+
+			mc := hs.c.conn.(*MirrorConn)
+
+			// Multi-SNI: now that we know the real SNI, dial the correct target
+			// and flush buffered ClientHello data to it.
+			if multiSNI && mc.targetPending {
+				if hs.clientHello != nil {
+					if sniTarget := config.Targets.PickBySNI(hs.clientHello.serverName); sniTarget != nil && sniTarget.Dest != effectiveDest {
+						newTarget, dialErr := config.DialContext(ctx, config.Type, sniTarget.Dest)
+						if dialErr != nil {
+							if config.Show {
+								fmt.Printf("REALITY remoteAddr: %v\tmulti-SNI redial failed: %v\n", remoteAddr, dialErr)
+							}
+							mc.FinalizePending()
+						} else {
+							if config.Xver == 1 || config.Xver == 2 {
+								proxyproto.HeaderProxyFromAddrs(config.Xver, conn.RemoteAddr(), conn.LocalAddr()).WriteTo(newTarget)
+							}
+							mc.ReplaceTarget(newTarget)
+							target = newTarget
+							effectiveDest = sniTarget.Dest
+							if config.Show {
+								fmt.Printf("REALITY remoteAddr: %v\tmulti-SNI resolved to: %v (SNI: %v)\n", remoteAddr, sniTarget.Dest, hs.clientHello.serverName)
+							}
+						}
+					} else {
+						mc.FinalizePending()
+					}
+				} else {
+					mc.FinalizePending()
+				}
+				// Signal goroutine 2 that the target is ready for reading
+				close(targetReady)
+				targetReady = nil // prevent double-close
+			}
+
 			if copying || err != nil || hs.c.vers != VersionTLS13 || !effectiveServerNames[hs.clientHello.serverName] {
 				break
 			}
@@ -304,6 +391,12 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 	}()
 
 	go func() {
+		// In multi-SNI mode, wait until the correct target is resolved
+		// before reading from it.
+		if targetReady != nil {
+			<-targetReady
+		}
+
 		s2cSaved := make([]byte, 0, size)
 		buf := make([]byte, size)
 		handshakeLen := 0

@@ -122,3 +122,16 @@ func (tp *TargetPool) Len() int {
 	defer tp.mu.RUnlock()
 	return len(tp.targets)
 }
+
+// PickBySNI returns the target whose ServerNames contains the given SNI.
+// Returns nil if no match found.
+func (tp *TargetPool) PickBySNI(sni string) *Target {
+	tp.mu.RLock()
+	defer tp.mu.RUnlock()
+	for i := range tp.targets {
+		if tp.targets[i].ServerNames[sni] {
+			return &tp.targets[i]
+		}
+	}
+	return nil
+}
