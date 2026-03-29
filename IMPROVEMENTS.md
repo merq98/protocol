@@ -9,7 +9,7 @@
 | 1 | Авто-подбор target по GeoIP/ASN | SNI ≠ GeoIP | ✅ Готово |
 | 2 | Ротация target'ов | Active probing | ✅ Готово |
 | 3 | Мульти-SNI на одном сервере | Паттерн одного клиента | ✅ Готово |
-| 4 | Pre-built mode (кэш ответов target'а) | Active probing + timing | ⬜ Не начато |
+| 4 | Pre-built mode (кэш ответов target'а) | Active probing + timing | ✅ Готово |
 | 5 | Короткие ротируемые соединения | Статистика потоков | ⬜ Не начато |
 | 6 | Padding до типичных размеров HTTP/2 | Статистика потоков | ⬜ Не начато |
 | 7 | Timing normalization | Active probing | ⬜ Не начато |

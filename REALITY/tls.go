@@ -263,8 +263,10 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 
 	// In multi-SNI mode, goroutine 2 (target→client) must wait until
 	// the correct target is dialed and the ClientHello is flushed to it.
+	// In prebuilt mode, goroutine 2 also needs to wait for ClientHello
+	// to know which SNI to look up in the cache.
 	var targetReady chan struct{}
-	if multiSNI {
+	if multiSNI || config.Prebuilt != nil {
 		targetReady = make(chan struct{})
 	}
 
@@ -309,6 +311,13 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 				// Signal goroutine 2 that the target is ready for reading
 				close(targetReady)
 				targetReady = nil // prevent double-close
+			}
+
+			// If targetReady is still open (prebuilt-only mode, no multi-SNI),
+			// signal goroutine 2 now that ClientHello is read.
+			if targetReady != nil {
+				close(targetReady)
+				targetReady = nil
 			}
 
 			if copying || err != nil || hs.c.vers != VersionTLS13 || !effectiveServerNames[hs.clientHello.serverName] {
@@ -400,20 +409,45 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 		s2cSaved := make([]byte, 0, size)
 		buf := make([]byte, size)
 		handshakeLen := 0
+
+		// Pre-built mode: check cache for a pre-captured response.
+		// If available, seed s2cSaved with cached records so the parsing
+		// loop doesn't need to wait for the real target. This eliminates
+		// the RTT doubling that DPI can detect.
+		var prebuiltUsed bool
+		if config.Prebuilt != nil && hs.clientHello != nil {
+			cached := config.Prebuilt.Get(effectiveDest, hs.clientHello.serverName)
+			if cached != nil && cached.Hello != nil {
+				s2cSaved = append(s2cSaved, cached.RawRecords...)
+				prebuiltUsed = true
+				if config.Show {
+					fmt.Printf("REALITY remoteAddr: %v\tprebuilt cache hit: %v/%v (%d bytes)\n",
+						remoteAddr, effectiveDest, hs.clientHello.serverName, len(cached.RawRecords))
+				}
+			}
+		}
+
 	f:
 		for {
-			runtime.Gosched()
-			n, err := target.Read(buf)
-			if n == 0 {
-				if err != nil {
-					conn.Close()
-					waitGroup.Done()
-					return
+			// If prebuilt data was loaded, process it on the first pass
+			// without reading from target.
+			if prebuiltUsed && len(s2cSaved) > 0 {
+				prebuiltUsed = false // only skip read once
+				mutex.Lock()
+			} else {
+				runtime.Gosched()
+				n, err := target.Read(buf)
+				if n == 0 {
+					if err != nil {
+						conn.Close()
+						waitGroup.Done()
+						return
+					}
+					continue
 				}
-				continue
+				mutex.Lock()
+				s2cSaved = append(s2cSaved, buf[:n]...)
 			}
-			mutex.Lock()
-			s2cSaved = append(s2cSaved, buf[:n]...)
 			if hs.c.conn != conn {
 				copying = true // if the target already sent some data, just start bidirectional direct forwarding
 				break

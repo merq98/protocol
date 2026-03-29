@@ -570,6 +570,12 @@ type Config struct {
 	// among them per connection or per time interval.
 	Targets *TargetPool
 
+	// Prebuilt is an optional cache of pre-captured TLS handshake responses
+	// from targets. When set, non-authenticated connections are served from
+	// cache instead of proxying to the real target, eliminating the RTT
+	// doubling that DPI can detect via active probing.
+	Prebuilt *PrebuiltCache
+
 	LimitFallbackUpload   LimitFallback
 	LimitFallbackDownload LimitFallback
 
