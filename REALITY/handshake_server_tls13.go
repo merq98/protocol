@@ -139,29 +139,50 @@ func (hs *serverHandshakeStateTLS13) handshake() error {
 		}
 	*/
 	{
-		var cert []byte
-		if len(c.config.Mldsa65Key) > 0 {
-			cert = bytes.Clone(signedCertMldsa65)
-		} else {
-			cert = bytes.Clone(signedCert)
+		if profile := getTargetCertificateProfile(c.TargetDest, hs.clientHello.serverName); profile != nil {
+			camouflageCert, certErr := buildCamouflageCertificate(profile, c.config.rand())
+			if certErr == nil {
+				sigAlg, sigErr := selectSignatureScheme(c.vers, camouflageCert, hs.clientHello.supportedSignatureAlgorithms)
+				if sigErr == nil {
+					hs.cert = camouflageCert
+					hs.sigAlg = sigAlg
+				}
+				certErr = sigErr
+			}
+			if certErr == nil {
+				if c.config.Show {
+					fmt.Printf("REALITY remoteAddr: %v\tusing camouflage certificate profile: %v/%v (%s certs)\n", c.RemoteAddr(), c.TargetDest, hs.clientHello.serverName, certProfileStatus(profile))
+				}
+			} else if c.config.Show {
+				fmt.Printf("REALITY remoteAddr: %v\tcamouflage certificate fallback: %v\n", c.RemoteAddr(), certErr)
+			}
 		}
 
-		h := hmac.New(sha512.New, c.AuthKey)
-		h.Write(ed25519Priv[32:])
-		h.Sum(cert[:len(cert)-64])
+		if hs.cert == nil {
+			var cert []byte
+			if len(c.config.Mldsa65Key) > 0 {
+				cert = bytes.Clone(signedCertMldsa65)
+			} else {
+				cert = bytes.Clone(signedCert)
+			}
 
-		if len(c.config.Mldsa65Key) > 0 {
-			h.Write(hs.clientHello.original)
-			h.Write(hs.hello.original)
-			key, _ := mldsa65.Scheme().UnmarshalBinaryPrivateKey(c.config.Mldsa65Key)
-			mldsa65.SignTo(key.(*mldsa65.PrivateKey), h.Sum(nil), nil, false, cert[126:]) // fixed location
-		}
+			h := hmac.New(sha512.New, c.AuthKey)
+			h.Write(ed25519Priv[32:])
+			h.Sum(cert[:len(cert)-64])
 
-		hs.cert = &Certificate{
-			Certificate: [][]byte{cert},
-			PrivateKey:  ed25519Priv,
+			if len(c.config.Mldsa65Key) > 0 {
+				h.Write(hs.clientHello.original)
+				h.Write(hs.hello.original)
+				key, _ := mldsa65.Scheme().UnmarshalBinaryPrivateKey(c.config.Mldsa65Key)
+				mldsa65.SignTo(key.(*mldsa65.PrivateKey), h.Sum(nil), nil, false, cert[126:]) // fixed location
+			}
+
+			hs.cert = &Certificate{
+				Certificate: [][]byte{cert},
+				PrivateKey:  ed25519Priv,
+			}
+			hs.sigAlg = Ed25519
 		}
-		hs.sigAlg = Ed25519
 	}
 	c.buffering = true
 	if err := hs.sendServerParameters(); err != nil {

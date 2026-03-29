@@ -524,6 +524,7 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 				handshakeLen = 0
 			}
 			start := time.Now()
+			hs.c.TargetDest = effectiveDest
 			err = hs.handshake()
 			if config.Show {
 				fmt.Printf("REALITY remoteAddr: %v\ths.handshake() err: %v\n", remoteAddr, err)
@@ -687,6 +688,7 @@ func (l *listener) Accept() (net.Conn, error) {
 // at least one certificate or else set GetCertificate.
 func NewListener(inner net.Listener, config *Config) net.Listener {
 	go DetectPostHandshakeRecordsLens(config)
+	go DetectTargetCertificateProfiles(config)
 	l := new(listener)
 	l.Listener = inner
 	l.config = config

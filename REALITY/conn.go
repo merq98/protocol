@@ -30,6 +30,7 @@ type Conn struct {
 	ClientTime        time.Time
 	ClientShortId     [8]byte
 	MaxUselessRecords int
+	TargetDest        string
 
 	// PeerFingerprint holds the latest OTA fingerprint captured from
 	// a real browser's ClientHello. Set by the server for authenticated
