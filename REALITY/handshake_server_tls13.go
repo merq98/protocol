@@ -173,11 +173,6 @@ func (hs *serverHandshakeStateTLS13) handshake() error {
 	if err := hs.sendServerFinished(); err != nil {
 		return err
 	}
-	if hs.c.out.handshakeLen[6] != 0 {
-		if _, err := c.writeRecord(recordTypeHandshake, []byte{typeNewSessionTicket}); err != nil {
-			return err
-		}
-	}
 	// Note that at this point we could start sending application data without
 	// waiting for the client's second flight, but the application might not
 	// expect the lack of replay protection of the ClientHello parameters.

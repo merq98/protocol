@@ -558,39 +558,9 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 			if config.Timing != nil {
 				config.Timing.Sleep(time.Since(targetReadStart))
 			}
-			for {
-				key := effectiveDest + " " + hs.clientHello.serverName
-				if len(hs.clientHello.alpnProtocols) == 0 {
-					key += " 0"
-				} else if hs.clientHello.alpnProtocols[0] == "h2" {
-					key += " 2"
-				} else {
-					key += " 1"
-				}
-				if val, ok := GlobalPostHandshakeRecordsLens.Load(key); ok {
-					if postHandshakeRecordsLens, ok := val.([]int); ok {
-						for _, length := range postHandshakeRecordsLens {
-							plainText := make([]byte, length-16)
-							plainText[0] = 23
-							plainText[1] = 3
-							plainText[2] = 3
-							plainText[3] = byte((length - 5) >> 8)
-							plainText[4] = byte((length - 5))
-							plainText[5] = 23
-							postHandshakeRecord := hs.c.out.cipher.(aead).Seal(plainText[:5], hs.c.out.seq[:], plainText[5:], plainText[:5])
-							hs.c.out.incSeq()
-							hs.c.write(postHandshakeRecord)
-							if config.Show {
-								fmt.Printf("REALITY remoteAddr: %v\tlen(postHandshakeRecord): %v\n", remoteAddr, len(postHandshakeRecord))
-							}
-						}
-						break
-					}
-				}
-				time.Sleep(5 * time.Second)
-				if maxUseless, ok := GlobalMaxCSSMsgCount.Load(key); ok {
-					hs.c.MaxUselessRecords = maxUseless.(int)
-				}
+			key := postHandshakeProfileKey(effectiveDest, hs.clientHello)
+			if maxUseless, ok := GlobalMaxCSSMsgCount.Load(key); ok {
+				hs.c.MaxUselessRecords = maxUseless.(int)
 			}
 			// Enable H2 padding for application data if configured
 			if config.H2Padding != nil {
@@ -602,6 +572,7 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 				hs.c.PeerFingerprint = config.Fingerprints.Latest()
 			}
 			hs.c.isHandshakeComplete.Store(true)
+			hs.startRandomizedPostHandshakeTickets(effectiveDest)
 			break
 		}
 		mutex.Unlock()

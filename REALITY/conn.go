@@ -552,11 +552,6 @@ func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader) ([]byte, err
 				case typeFinished:
 					padding = hc.handshakeLen[5]
 					hc.handshakeLen[5] = 0
-				case typeNewSessionTicket:
-					padding = hc.handshakeLen[6]
-					hc.handshakeLen[6] = 0
-					record[5] = byte(recordTypeApplicationData)
-					record[6] = 0
 				}
 				padding -= len(record) + c.Overhead()
 				if padding < 0 {
