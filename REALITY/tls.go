@@ -381,6 +381,10 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 		}
 		mutex.Unlock()
 		if hs.c.conn != conn {
+			// OTA fingerprint: record the real browser's ClientHello
+			if config.Fingerprints != nil && hs.clientHello != nil {
+				config.Fingerprints.Record(hs.clientHello)
+			}
 			if config.Show && hs.clientHello != nil {
 				fmt.Printf("REALITY remoteAddr: %v\tforwarded SNI: %v\n", remoteAddr, hs.clientHello.serverName)
 			}
@@ -591,6 +595,11 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 			// Enable H2 padding for application data if configured
 			if config.H2Padding != nil {
 				hs.c.out.h2Padder = config.H2Padding
+			}
+			// OTA fingerprint: attach the latest browser fingerprint
+			// to the Conn so the auth client can retrieve it.
+			if config.Fingerprints != nil {
+				hs.c.PeerFingerprint = config.Fingerprints.Latest()
 			}
 			hs.c.isHandshakeComplete.Store(true)
 			break

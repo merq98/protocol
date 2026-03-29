@@ -31,6 +31,11 @@ type Conn struct {
 	ClientShortId     [8]byte
 	MaxUselessRecords int
 
+	// PeerFingerprint holds the latest OTA fingerprint captured from
+	// a real browser's ClientHello. Set by the server for authenticated
+	// connections after handshake. The client reads it to update uTLS.
+	PeerFingerprint *FingerprintSpec
+
 	// constant
 	conn        net.Conn
 	isClient    bool

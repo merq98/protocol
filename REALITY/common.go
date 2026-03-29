@@ -598,6 +598,11 @@ type Config struct {
 	// from a DPI timing-analysis perspective.
 	Timing *TimingNormalizer
 
+	// Fingerprints, when non-nil, captures TLS ClientHello fingerprints
+	// from non-authenticated (real browser) connections and delivers the
+	// latest one to authenticated clients for OTA uTLS fingerprint updates.
+	Fingerprints *FingerprintStore
+
 	LimitFallbackUpload   LimitFallback
 	LimitFallbackDownload LimitFallback
 

@@ -14,7 +14,7 @@
 | 6 | Padding до типичных размеров HTTP/2 | Статистика потоков | ✅ Готово |
 | 7 | Timing normalization | Active probing | ✅ Готово |
 | 8 | CDN relay (Cloudflare Workers) | Блокировка IP | ✅ Готово |
-| 9 | OTA fingerprint update для uTLS | uTLS fingerprint | ⬜ Не начато |
+| 9 | OTA fingerprint update для uTLS | uTLS fingerprint | ✅ Готово |
 
 ---
 
@@ -103,8 +103,15 @@
 
 ---
 
-## 9. OTA fingerprint update для uTLS
+## 9. OTA fingerprint update для uTLS ✅ Готово
 
 **Вектор атаки:** uTLS эмулирует устаревший fingerprint Chrome.
 
 **Решение:** Сервер передаёт клиенту актуальный шаблон ClientHello при подключении.
+
+**Реализация:**
+- `fingerprint.go` — `FingerprintSpec` (JSON-сериализуемый снимок ClientHello: cipher suites, extensions order, curves, ALPN, key share groups, PSK modes, ECH)
+- `ExtractFingerprint(ch)` — парсит `clientHelloMsg` в `FingerprintSpec`
+- `FingerprintStore` — потокобезопасное хранилище с `maxAge` (24h по умолчанию)
+- `Server()` — при non-auth клиенте вызывает `Record(ch)`, при auth — ставит `Conn.PeerFingerprint = Latest()`
+- Клиент читает `conn.PeerFingerprint` после handshake и конфигурирует uTLS
