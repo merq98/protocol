@@ -3,7 +3,9 @@ package reality
 import (
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -46,6 +48,13 @@ type PrebuiltCache struct {
 
 	stopCh chan struct{}
 }
+
+type prebuiltPair struct {
+	Dest string
+	SNI  string
+}
+
+const minPrebuiltRefreshDelay = 5 * time.Second
 
 // NewPrebuiltCache creates a new cache with the given refresh interval.
 func NewPrebuiltCache(refreshInterval, maxAge time.Duration) *PrebuiltCache {
@@ -103,25 +112,7 @@ func (pc *PrebuiltCache) Warm(networkType, dest, sni string, show bool) error {
 
 // WarmAll probes all targets from a config (both single and pool targets).
 func (pc *PrebuiltCache) WarmAll(config *Config) {
-	type destSNI struct {
-		Dest string
-		SNI  string
-	}
-	var pairs []destSNI
-
-	if config.Targets != nil && config.Targets.Len() > 0 {
-		config.Targets.mu.RLock()
-		for _, t := range config.Targets.targets {
-			for sni := range t.ServerNames {
-				pairs = append(pairs, destSNI{Dest: t.Dest, SNI: sni})
-			}
-		}
-		config.Targets.mu.RUnlock()
-	} else if config.Dest != "" {
-		for sni := range config.ServerNames {
-			pairs = append(pairs, destSNI{Dest: config.Dest, SNI: sni})
-		}
-	}
+	pairs := collectPrebuiltPairs(config)
 
 	var wg sync.WaitGroup
 	for _, p := range pairs {
@@ -141,17 +132,38 @@ func (pc *PrebuiltCache) WarmAll(config *Config) {
 }
 
 // StartRefresh begins a background goroutine that periodically refreshes
-// all cached entries.
+// cached entries in a staggered order to avoid periodic outbound bursts.
 func (pc *PrebuiltCache) StartRefresh(config *Config) {
 	go func() {
-		ticker := time.NewTicker(pc.RefreshInterval)
-		defer ticker.Stop()
 		for {
-			select {
-			case <-ticker.C:
-				pc.WarmAll(config)
-			case <-pc.stopCh:
-				return
+			pairs := collectPrebuiltPairs(config)
+			if len(pairs) == 0 {
+				if !pc.waitForRefresh(pc.jitteredRefreshDelay(pc.RefreshInterval)) {
+					return
+				}
+				continue
+			}
+
+			rand.Shuffle(len(pairs), func(i, j int) {
+				pairs[i], pairs[j] = pairs[j], pairs[i]
+			})
+
+			baseDelay := pc.RefreshInterval / time.Duration(len(pairs))
+			if baseDelay < minPrebuiltRefreshDelay {
+				baseDelay = minPrebuiltRefreshDelay
+			}
+
+			for _, pair := range pairs {
+				if !pc.waitForRefresh(pc.jitteredRefreshDelay(baseDelay)) {
+					return
+				}
+				if err := pc.Warm(config.Type, pair.Dest, pair.SNI, config.Show); err != nil {
+					if config.Show {
+						fmt.Printf("REALITY prebuilt: failed to refresh %v/%v: %v\n", pair.Dest, pair.SNI, err)
+					}
+				} else if config.Show {
+					fmt.Printf("REALITY prebuilt: refreshed %v/%v\n", pair.Dest, pair.SNI)
+				}
 			}
 		}
 	}()
@@ -163,6 +175,76 @@ func (pc *PrebuiltCache) Stop() {
 	case <-pc.stopCh:
 	default:
 		close(pc.stopCh)
+	}
+}
+
+func collectPrebuiltPairs(config *Config) []prebuiltPair {
+	unique := make(map[string]prebuiltPair)
+
+	if config.Targets != nil && config.Targets.Len() > 0 {
+		config.Targets.mu.RLock()
+		for _, t := range config.Targets.targets {
+			for sni := range t.ServerNames {
+				pair := prebuiltPair{Dest: t.Dest, SNI: sni}
+				unique[cacheKey(pair.Dest, pair.SNI)] = pair
+			}
+		}
+		config.Targets.mu.RUnlock()
+	} else if config.Dest != "" {
+		for sni := range config.ServerNames {
+			pair := prebuiltPair{Dest: config.Dest, SNI: sni}
+			unique[cacheKey(pair.Dest, pair.SNI)] = pair
+		}
+	}
+
+	pairs := make([]prebuiltPair, 0, len(unique))
+	for _, pair := range unique {
+		pairs = append(pairs, pair)
+	}
+	slices.SortFunc(pairs, func(a, b prebuiltPair) int {
+		if a.Dest == b.Dest {
+			return compareStrings(a.SNI, b.SNI)
+		}
+		return compareStrings(a.Dest, b.Dest)
+	})
+	return pairs
+}
+
+func (pc *PrebuiltCache) waitForRefresh(delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-pc.stopCh:
+		return false
+	}
+}
+
+func (pc *PrebuiltCache) jitteredRefreshDelay(base time.Duration) time.Duration {
+	if base <= 0 {
+		base = minPrebuiltRefreshDelay
+	}
+	spread := time.Duration(float64(base) * 0.35)
+	if spread < time.Second {
+		spread = time.Second
+	}
+	delay := base + time.Duration((2*rand.Float64()-1)*float64(spread))
+	if delay < minPrebuiltRefreshDelay {
+		return minPrebuiltRefreshDelay
+	}
+	return delay
+}
+
+func compareStrings(a, b string) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
 	}
 }
 
