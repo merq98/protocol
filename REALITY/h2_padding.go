@@ -2,8 +2,11 @@ package reality
 
 import (
 	"math/rand/v2"
+	"slices"
 	"sync"
 )
+
+const maxTLS13InnerPlaintext = maxPlaintext + 1
 
 // H2Padder pads TLS application data records to look like typical HTTP/2
 // frame sizes. This defeats DPI that uses record-size distribution to
@@ -21,30 +24,40 @@ type H2Padder struct {
 	mu      sync.Mutex
 	enabled bool
 
-	// FrameSizes is the set of target payload sizes (before encryption)
-	// that the padder will round up to. Records larger than the biggest
-	// target are left as-is (they already look like full DATA frames).
+	// FrameSizes holds anchor points used to derive padding windows.
+	// The padder will pick a random target near the first anchor that can
+	// accommodate the current plaintext instead of rounding to a fixed peak.
 	FrameSizes []int
 
 	// SmallFrameChance is the probability [0.0, 1.0] that a record will
-	// be padded to a small control-frame size instead of the next larger
-	// frame size. This adds natural-looking small records to the mix.
+	// be padded to a small control/header-like frame window instead of the
+	// next larger data-oriented window. This adds natural-looking small
+	// records to the mix.
 	// Default: 0.05 (5%).
 	SmallFrameChance float64
+
+	// WindowJitter is the fraction of each anchor size used as a random
+	// window around that anchor. Higher values spread records more widely
+	// and reduce visible histogram spikes.
+	WindowJitter float64
+
+	// FullFrameChance is the probability [0.0, 1.0] of padding near a
+	// full-size data frame once the payload is already large enough.
+	FullFrameChance float64
 }
 
 // Common HTTP/2 payload sizes at the TLS record level.
 // These are frame payload + 9 byte HTTP/2 frame header.
 var defaultH2FrameSizes = []int{
-	18,    // SETTINGS (empty): 9 header + 0 payload, or PING: 9+8
-	22,    // WINDOW_UPDATE: 9 header + 4 payload + padding
+	18,    // SETTINGS/PING-sized control frames
+	22,    // WINDOW_UPDATE-sized frames
 	50,    // Small HEADERS or SETTINGS with values
 	165,   // Typical small HEADERS frame
 	490,   // Medium HEADERS frame with cookies
 	1250,  // Large HEADERS frame
 	4105,  // Partial DATA frame (common in streaming)
 	8210,  // Half-size DATA frame
-	16393, // Full DATA frame: 9 header + 16384 payload
+	16385, // Max TLS 1.3 inner plaintext: 16384 + content type byte
 }
 
 // NewH2Padder creates a padder with default HTTP/2 frame sizes.
@@ -55,6 +68,8 @@ func NewH2Padder() *H2Padder {
 		enabled:          true,
 		FrameSizes:       sizes,
 		SmallFrameChance: 0.05,
+		WindowJitter:     0.12,
+		FullFrameChance:  0.35,
 	}
 }
 
@@ -66,33 +81,34 @@ func NewH2Padder() *H2Padder {
 // Returns 0 if no padding should be applied (padder disabled or
 // payload already matches a target size).
 func (p *H2Padder) PadSize(payloadLen int) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if !p.enabled || payloadLen <= 0 {
 		return 0
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Occasionally emit a small control-frame-sized record
-	if p.SmallFrameChance > 0 && payloadLen < 100 && rand.Float64() < p.SmallFrameChance {
-		// Pick a random small frame size
-		for _, sz := range p.FrameSizes {
-			if sz >= payloadLen && sz < 100 {
-				return sz
-			}
-		}
+	anchors := p.normalizedAnchorsLocked()
+	if len(anchors) == 0 {
+		return 0
 	}
 
-	// Find the smallest target size >= payloadLen
-	for _, sz := range p.FrameSizes {
-		if sz >= payloadLen {
-			return sz
-		}
+	limit := min(maxTLS13InnerPlaintext, anchors[len(anchors)-1])
+	if payloadLen >= limit {
+		return 0
 	}
 
-	// Payload larger than biggest target — no padding needed,
-	// it already looks like a full DATA frame.
-	return 0
+	targetIndex := p.pickAnchorIndexLocked(payloadLen, anchors)
+	if targetIndex < 0 {
+		return 0
+	}
+
+	target := p.pickTargetInWindowLocked(payloadLen, targetIndex, anchors, limit)
+	if target <= payloadLen {
+		return 0
+	}
+
+	return target
 }
 
 // PaddingBytes returns how many zero bytes to append for a given payload.
@@ -109,4 +125,125 @@ func (p *H2Padder) SetEnabled(enabled bool) {
 	p.mu.Lock()
 	p.enabled = enabled
 	p.mu.Unlock()
+}
+
+func (p *H2Padder) normalizedAnchorsLocked() []int {
+	if len(p.FrameSizes) == 0 {
+		return nil
+	}
+
+	anchors := slices.Clone(p.FrameSizes)
+	slices.Sort(anchors)
+	anchors = slices.Compact(anchors)
+
+	filtered := anchors[:0]
+	for _, anchor := range anchors {
+		if anchor <= 0 {
+			continue
+		}
+		if anchor > maxTLS13InnerPlaintext {
+			anchor = maxTLS13InnerPlaintext
+		}
+		if len(filtered) == 0 || filtered[len(filtered)-1] != anchor {
+			filtered = append(filtered, anchor)
+		}
+	}
+
+	return filtered
+}
+
+func (p *H2Padder) pickAnchorIndexLocked(payloadLen int, anchors []int) int {
+	firstFit := slices.IndexFunc(anchors, func(anchor int) bool {
+		return anchor >= payloadLen
+	})
+	if firstFit < 0 {
+		return -1
+	}
+
+	if payloadLen < 256 && p.SmallFrameChance > 0 && rand.Float64() < p.SmallFrameChance {
+		smallCap := firstFit
+		for smallCap+1 < len(anchors) && anchors[smallCap+1] <= 256 {
+			smallCap++
+		}
+		if smallCap >= firstFit {
+			return firstFit + rand.IntN(smallCap-firstFit+1)
+		}
+	}
+
+	lastIndex := len(anchors) - 1
+	if payloadLen >= 4096 && p.FullFrameChance > 0 && rand.Float64() < p.FullFrameChance {
+		fullStart := max(firstFit, lastIndex-1)
+		if fullStart <= lastIndex {
+			return fullStart + rand.IntN(lastIndex-fullStart+1)
+		}
+	}
+
+	span := min(3, len(anchors)-firstFit)
+	if span <= 1 {
+		return firstFit
+	}
+
+	return firstFit + rand.IntN(span)
+}
+
+func (p *H2Padder) pickTargetInWindowLocked(payloadLen, index int, anchors []int, limit int) int {
+	anchor := anchors[index]
+	prevAnchor := 0
+	if index > 0 {
+		prevAnchor = anchors[index-1]
+	}
+	nextAnchor := limit
+	if index+1 < len(anchors) {
+		nextAnchor = anchors[index+1]
+	}
+
+	jitterFraction := p.WindowJitter
+	if jitterFraction <= 0 {
+		jitterFraction = 0.08
+	}
+	jitter := max(4, int(float64(anchor)*jitterFraction))
+
+	low := max(payloadLen, anchor-jitter)
+	high := min(limit, anchor+jitter)
+	if prevAnchor > 0 {
+		low = max(low, prevAnchor+1)
+	}
+	if nextAnchor > anchor {
+		high = min(high, nextAnchor-1)
+	}
+	if high <= payloadLen {
+		return 0
+	}
+	if low > high {
+		low = payloadLen + 1
+		high = max(low, min(limit, anchor))
+	}
+
+	if payloadLen < 128 {
+		step := smallPayloadStep(payloadLen)
+		low = roundUp(low, step)
+		high -= high % step
+		if low > high {
+			low = payloadLen + 1
+			high = low
+		}
+		if high <= payloadLen {
+			return 0
+		}
+		count := ((high - low) / step) + 1
+		return low + rand.IntN(count)*step
+	}
+
+	return low + rand.IntN(high-low+1)
+}
+
+func smallPayloadStep(payloadLen int) int {
+	switch {
+	case payloadLen <= 32:
+		return 2
+	case payloadLen <= 96:
+		return 4
+	default:
+		return 8
+	}
 }

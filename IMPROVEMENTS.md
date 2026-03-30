@@ -146,9 +146,11 @@
 **Реализация:** `REALITY/h2_padding.go` + `REALITY/conn.go`
 
 - `H2Padder` — паддер записей:
-  - `FrameSizes []int` — целевые размеры: `[18, 22, 50, 165, 490, 1250, 4105, 8210, 16393]`
+  - `FrameSizes []int` — anchor sizes: `[18, 22, 50, 165, 490, 1250, 4105, 8210, 16385]`
   - `SmallFrameChance float64` (default 0.05) — вероятность эмиссии маленького control-frame
-  - `PadSize(payloadLen) int` — ближайший размер из `FrameSizes` (≥ payload)
+  - `WindowJitter float64` (default 0.12) — ширина случайного окна вокруг anchor-size
+  - `FullFrameChance float64` (default 0.35) — шанс уйти в почти full-size DATA window
+  - `PadSize(payloadLen) int` — выбирает случайный target внутри окна вокруг подходящего anchor, а не округляет к фиксированному пику
   - `PaddingBytes(payloadLen) int` — количество нулевых байт для дополнения
   - `SetEnabled(bool)` — вкл/выкл в runtime
 - В `conn.go`, метод `halfConn.encrypt()`:
@@ -311,10 +313,9 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 3. Жёстко заданные размеры H2 padding
 
-- Проблема: `H2Padder` использует фиксированный список размеров `[18, 22, 50, 165, 490, 1250, 4105, 8210, 16393]`.
+- Что изменено: `H2Padder` больше не округляет к фиксированным размерам. Теперь список используется как набор anchor points, а итоговый размер выбирается случайно внутри окна вокруг подходящего anchor с bias для small/control frames и near-full DATA frames.
 - Где: `REALITY/h2_padding.go`.
-- Как детектят: ML-классификатор строит гистограмму размеров application records и видит характерные пики ровно в этих точках.
-- Риск: даже без active probing это создаёт удобный статистический признак.
+- Остаточный риск: профиль стал существенно менее детерминированным, но anchor-направленность и отсутствие связи с реальным upstream HTTP/2 трафиком всё ещё оставляют место для статистической кластеризации на больших выборках.
 
 #### 4. Active probing через CCS flood
 
