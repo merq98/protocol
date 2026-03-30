@@ -339,9 +339,9 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 7. Padding применяется только к ApplicationData
 
-- Проблема: handshake records остаются «натуральными», а затем размеры резко переключаются на padded HTTP/2-профиль.
-- Где: `REALITY/conn.go`, `halfConn.encrypt()`.
-- Как детектят: по переходу распределения размеров между handshake и первым application traffic.
+- Что изменено: первые несколько `ApplicationData` больше не перескакивают сразу в чистый H2-профиль. `halfConn` теперь запоминает размеры последних encrypted handshake records и использует transition padding для первых application records, после чего постепенно переключается на обычный `H2Padder`.
+- Где: `REALITY/conn.go`, `REALITY/h2_padding.go`.
+- Остаточный риск: резкий разрыв между handshake и application profile смягчён, но без полноценного воспроизведения распределения конкретного upstream-приложения первые данные всё ещё могут статистически отличаться от реального origin на длинных сессиях.
 
 #### 8. Периодическое обновление prebuilt cache
 

@@ -237,9 +237,35 @@ type halfConn struct {
 	level         QUICEncryptionLevel // current QUIC encryption level
 	trafficSecret []byte              // current TLS 1.3 traffic secret
 
+	recentHandshakeSizes [4]int
+	recentHandshakeCount int
+	applicationDataCount int
+
 	// h2Padder, when non-nil, pads application data records to match
 	// typical HTTP/2 frame sizes, defeating record-size DPI analysis.
 	h2Padder *H2Padder
+}
+
+func (hc *halfConn) rememberEncryptedHandshakeSize(size int) {
+	if size <= 0 || hc.applicationDataCount > 0 {
+		return
+	}
+	if hc.recentHandshakeCount < len(hc.recentHandshakeSizes) {
+		hc.recentHandshakeSizes[hc.recentHandshakeCount] = size
+		hc.recentHandshakeCount++
+	} else {
+		copy(hc.recentHandshakeSizes[:], hc.recentHandshakeSizes[1:])
+		hc.recentHandshakeSizes[len(hc.recentHandshakeSizes)-1] = size
+	}
+}
+
+func (hc *halfConn) recentEncryptedHandshakeSizes() []int {
+	if hc.recentHandshakeCount == 0 {
+		return nil
+	}
+	sizes := make([]int, hc.recentHandshakeCount)
+	copy(sizes, hc.recentHandshakeSizes[:hc.recentHandshakeCount])
+	return sizes
 }
 
 type permanentError struct {
@@ -579,6 +605,7 @@ func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader) ([]byte, err
 
 			// Encrypt the actual ContentType and replace the plaintext one.
 			record = append(record, record[0])
+			innerPlainLen := 0
 			padding := 0
 			if recordType(record[0]) == recordTypeHandshake && hc.handshakeLen[1] != 0 {
 				switch payload[0] {
@@ -601,17 +628,25 @@ func (hc *halfConn) encrypt(record, payload []byte, rand io.Reader) ([]byte, err
 				}
 				record = append(record, empty[:padding]...)
 			}
+			innerPlainLen = len(record) - recordHeaderLen
+			if recordType(record[0]) == recordTypeHandshake {
+				hc.rememberEncryptedHandshakeSize(innerPlainLen)
+			}
 
 			// H2 padding: for application data records, pad to match
 			// typical HTTP/2 frame sizes. TLS 1.3 allows zero-byte
 			// padding after the ContentType byte (RFC 8446 §5.4).
 			if hc.h2Padder != nil && recordType(record[0]) == recordTypeApplicationData {
 				// payload length = current record minus header, minus 1 (ContentType byte)
-				plainLen := len(record) - recordHeaderLen
-				h2pad := hc.h2Padder.PaddingBytes(plainLen)
+				plainLen := innerPlainLen
+				h2pad := hc.h2Padder.TransitionPaddingBytes(plainLen, hc.recentEncryptedHandshakeSizes(), hc.applicationDataCount)
+				if h2pad == 0 {
+					h2pad = hc.h2Padder.PaddingBytes(plainLen)
+				}
 				if h2pad > 0 && h2pad <= len(empty) {
 					record = append(record, empty[:h2pad]...)
 				}
+				hc.applicationDataCount++
 			}
 
 			record[0] = byte(recordTypeApplicationData)

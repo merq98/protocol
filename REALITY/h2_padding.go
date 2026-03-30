@@ -7,6 +7,7 @@ import (
 )
 
 const maxTLS13InnerPlaintext = maxPlaintext + 1
+const handshakeTransitionRecordCount = 3
 
 // H2Padder pads TLS application data records to look like typical HTTP/2
 // frame sizes. This defeats DPI that uses record-size distribution to
@@ -117,6 +118,54 @@ func (p *H2Padder) PaddingBytes(payloadLen int) int {
 	if target <= payloadLen {
 		return 0
 	}
+	return target - payloadLen
+}
+
+// TransitionPaddingBytes smooths the size transition from the encrypted
+// handshake flight to the first application data records. For the first few
+// application records, it may bias padding toward recent handshake sizes
+// before handing off to the regular HTTP/2 profile.
+func (p *H2Padder) TransitionPaddingBytes(payloadLen int, recentHandshakeSizes []int, applicationRecordIndex int) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.enabled || payloadLen <= 0 || applicationRecordIndex >= handshakeTransitionRecordCount || len(recentHandshakeSizes) == 0 {
+		return 0
+	}
+
+	transitionChance := []float64{0.85, 0.55, 0.30}
+	if rand.Float64() > transitionChance[applicationRecordIndex] {
+		return 0
+	}
+
+	candidates := make([]int, 0, len(recentHandshakeSizes))
+	for _, sz := range recentHandshakeSizes {
+		if sz <= payloadLen {
+			continue
+		}
+		if sz > 3072 {
+			sz = 3072
+		}
+		if sz > payloadLen {
+			candidates = append(candidates, sz)
+		}
+	}
+	if len(candidates) == 0 {
+		return 0
+	}
+
+	anchor := candidates[len(candidates)-1]
+	if len(candidates) > 1 && rand.Float64() < 0.35 {
+		anchor = candidates[len(candidates)-1-rand.IntN(min(2, len(candidates)))]
+	}
+
+	jitter := max(8, int(float64(anchor)*maxFloat(0.10, p.WindowJitter)))
+	low := max(payloadLen+1, anchor-jitter)
+	high := min(maxTLS13InnerPlaintext, anchor+jitter)
+	if high < low {
+		return 0
+	}
+	target := low + rand.IntN(high-low+1)
 	return target - payloadLen
 }
 
@@ -246,4 +295,11 @@ func smallPayloadStep(payloadLen int) int {
 	default:
 		return 8
 	}
+}
+
+func maxFloat(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
 }
