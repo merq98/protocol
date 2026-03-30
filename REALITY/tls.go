@@ -81,12 +81,12 @@ func (c *MirrorConn) Read(b []byte) (int, error) {
 	if n != 0 {
 		if c.targetPending {
 			c.pendingBuf = append(c.pendingBuf, b[:n]...)
-		} else {
+		} else if c.Target != nil {
 			c.Target.Write(b[:n])
 		}
 	}
 	if err != nil {
-		if !c.targetPending {
+		if !c.targetPending && c.Target != nil {
 			c.Target.Close()
 		}
 	}
@@ -96,12 +96,12 @@ func (c *MirrorConn) Read(b []byte) (int, error) {
 // ReplaceTarget replaces the target connection and flushes any buffered data.
 // Must be called while the mutex is held.
 func (c *MirrorConn) ReplaceTarget(newTarget net.Conn) {
-	if c.targetPending {
+	if c.targetPending && c.Target != nil {
 		c.Target.Close()
 	}
 	c.Target = newTarget
 	c.targetPending = false
-	if len(c.pendingBuf) > 0 {
+	if c.Target != nil && len(c.pendingBuf) > 0 {
 		c.Target.Write(c.pendingBuf)
 		c.pendingBuf = nil
 	}
@@ -111,7 +111,7 @@ func (c *MirrorConn) ReplaceTarget(newTarget net.Conn) {
 // flushing any pending data. Must be called while the mutex is held.
 func (c *MirrorConn) FinalizePending() {
 	c.targetPending = false
-	if len(c.pendingBuf) > 0 {
+	if c.Target != nil && len(c.pendingBuf) > 0 {
 		c.Target.Write(c.pendingBuf)
 		c.pendingBuf = nil
 	}
@@ -202,39 +202,41 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 	}
 
 	// Resolve the effective dest and serverNames for this connection.
-	// Multi-SNI mode: if TargetPool is configured, we accept ALL SNIs from the pool
-	// initially. After reading ClientHello, we re-dial to the correct target dest
-	// based on the actual SNI from the client. This makes the server look like a
-	// CDN/reverse-proxy that hosts many domains.
+	// Multi-SNI mode accepts all configured SNIs first, then dials the actual
+	// upstream only after ClientHello reveals the requested SNI. This avoids the
+	// extra TCP connect/close side effects of dialing a random target first.
 	effectiveDest := config.Dest
 	effectiveServerNames := config.ServerNames
 	multiSNI := config.Targets != nil && config.Targets.Len() > 0
 
 	if multiSNI {
-		// Accept all SNIs from the pool
+		// Accept all SNIs from the pool.
 		effectiveServerNames = config.Targets.AllServerNames()
-		// Pick a random initial target for the first dial (needed for MirrorConn
-		// to start forwarding immediately). Will be replaced after SNI is known.
-		picked := config.Targets.PickRandom()
-		if picked != nil {
-			effectiveDest = picked.Dest
-			if config.Show {
-				fmt.Printf("REALITY remoteAddr: %v\tinitial target (multi-SNI): %v\n", remoteAddr, effectiveDest)
+	}
+
+	var target net.Conn
+	var err error
+	dialTarget := func(dest string) (net.Conn, error) {
+		newTarget, dialErr := config.DialContext(ctx, config.Type, dest)
+		if dialErr != nil {
+			return nil, dialErr
+		}
+
+		if config.Xver == 1 || config.Xver == 2 {
+			if _, proxyErr := proxyproto.HeaderProxyFromAddrs(config.Xver, conn.RemoteAddr(), conn.LocalAddr()).WriteTo(newTarget); proxyErr != nil {
+				newTarget.Close()
+				return nil, errors.New("REALITY: failed to send PROXY protocol: " + proxyErr.Error())
 			}
 		}
+
+		return newTarget, nil
 	}
 
-	target, err := config.DialContext(ctx, config.Type, effectiveDest)
-	if err != nil {
-		conn.Close()
-		return nil, errors.New("REALITY: failed to dial dest: " + err.Error())
-	}
-
-	if config.Xver == 1 || config.Xver == 2 {
-		if _, err = proxyproto.HeaderProxyFromAddrs(config.Xver, conn.RemoteAddr(), conn.LocalAddr()).WriteTo(target); err != nil {
-			target.Close()
+	if !multiSNI {
+		target, err = dialTarget(effectiveDest)
+		if err != nil {
 			conn.Close()
-			return nil, errors.New("REALITY: failed to send PROXY protocol: " + err.Error())
+			return nil, errors.New("REALITY: failed to dial dest: " + err.Error())
 		}
 	}
 
@@ -284,28 +286,28 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 			// and flush buffered ClientHello data to it.
 			if multiSNI && mc.targetPending {
 				if hs.clientHello != nil {
-					if sniTarget := config.Targets.PickBySNI(hs.clientHello.serverName); sniTarget != nil && sniTarget.Dest != effectiveDest {
-						newTarget, dialErr := config.DialContext(ctx, config.Type, sniTarget.Dest)
+					if sniTarget := config.Targets.PickBySNI(hs.clientHello.serverName); sniTarget != nil {
+						newTarget, dialErr := dialTarget(sniTarget.Dest)
 						if dialErr != nil {
 							if config.Show {
-								fmt.Printf("REALITY remoteAddr: %v\tmulti-SNI redial failed: %v\n", remoteAddr, dialErr)
+								fmt.Printf("REALITY remoteAddr: %v\tmulti-SNI dial failed: %v\n", remoteAddr, dialErr)
 							}
+							mc.Target = nil
 							mc.FinalizePending()
 						} else {
-							if config.Xver == 1 || config.Xver == 2 {
-								proxyproto.HeaderProxyFromAddrs(config.Xver, conn.RemoteAddr(), conn.LocalAddr()).WriteTo(newTarget)
-							}
 							mc.ReplaceTarget(newTarget)
 							target = newTarget
 							effectiveDest = sniTarget.Dest
 							if config.Show {
-								fmt.Printf("REALITY remoteAddr: %v\tmulti-SNI resolved to: %v (SNI: %v)\n", remoteAddr, sniTarget.Dest, hs.clientHello.serverName)
+								fmt.Printf("REALITY remoteAddr: %v\tmulti-SNI target selected: %v (SNI: %v)\n", remoteAddr, sniTarget.Dest, hs.clientHello.serverName)
 							}
 						}
 					} else {
+						mc.Target = nil
 						mc.FinalizePending()
 					}
 				} else {
+					mc.Target = nil
 					mc.FinalizePending()
 				}
 				// Signal goroutine 2 that the target is ready for reading
@@ -381,6 +383,11 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 		}
 		mutex.Unlock()
 		if hs.c.conn != conn {
+			if target == nil {
+				conn.Close()
+				waitGroup.Done()
+				return
+			}
 			// OTA fingerprint: record the real browser's ClientHello
 			if config.Fingerprints != nil && hs.clientHello != nil {
 				config.Fingerprints.Record(hs.clientHello)
@@ -408,6 +415,11 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 		// before reading from it.
 		if targetReady != nil {
 			<-targetReady
+		}
+		if target == nil {
+			conn.Close()
+			waitGroup.Done()
+			return
 		}
 
 		s2cSaved := make([]byte, 0, size)

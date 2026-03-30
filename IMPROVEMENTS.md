@@ -369,9 +369,9 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 12. Multi-SNI redial оставляет TCP-побочные эффекты
 
-- Проблема: в multi-SNI режиме сервер сначала подключается к случайному target, затем при необходимости redial'ится на правильный.
-- Где: `REALITY/tls.go`, логика `PickRandom()` → `PickBySNI()` → `ReplaceTarget()`.
-- Как детектят: по лишним TCP connect/close, задержке перед ответом или аномальному поведению первого target.
+- Что изменено: в multi-SNI режиме предварительный dial к случайному target удалён. Сервер теперь буферизует ClientHello в `MirrorConn`, выбирает upstream только после разбора SNI и делает ровно один dial к реальному target, исключая лишние connect/close на неверный origin.
+- Где: `REALITY/tls.go`.
+- Остаточный риск: побочный TCP redial устранён, но сам буферизованный старт handshake всё ещё может давать небольшой дополнительный latency до первого байта по сравнению с прямым single-origin сервером.
 
 #### 13. SessionID и auth-path корреляции
 
