@@ -139,7 +139,7 @@ func (hs *serverHandshakeStateTLS13) handshake() error {
 		}
 	*/
 	{
-		if profile := getTargetCertificateProfile(c.TargetDest, hs.clientHello.serverName); profile != nil {
+		if profile, profileErr := ensureTargetCertificateProfile(c.config.Type, c.TargetDest, hs.clientHello.serverName, c.config.Show); profileErr == nil && profile != nil {
 			camouflageCert, certErr := buildCamouflageCertificate(profile, c.config.rand())
 			if certErr == nil {
 				sigAlg, sigErr := selectSignatureScheme(c.vers, camouflageCert, hs.clientHello.supportedSignatureAlgorithms)
@@ -156,6 +156,8 @@ func (hs *serverHandshakeStateTLS13) handshake() error {
 			} else if c.config.Show {
 				fmt.Printf("REALITY remoteAddr: %v\tcamouflage certificate fallback: %v\n", c.RemoteAddr(), certErr)
 			}
+		} else if profileErr != nil && c.config.Show {
+			fmt.Printf("REALITY remoteAddr: %v\tcertificate profile capture fallback: %v\n", c.RemoteAddr(), profileErr)
 		}
 
 		if hs.cert == nil {

@@ -381,9 +381,9 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 14. Отсутствие некоторых признаков реального публичного TLS
 
-- Проблема: auth path не воспроизводит в полном объёме SAN/SCT/OCSP/issuer-chain реального target'а.
-- Где: `REALITY/handshake_server_tls13.go`, `REALITY/tls.go`.
-- Как детектят: активный пробер сравнивает сертификат, OCSP, session tickets и расширения с реальным origin.
+- Что изменено: auth path больше не зависит только от фонового прогрева certificate profile. Перед fallback на синтетический сертификат сервер теперь on-demand захватывает или обновляет target certificate profile и использует camouflage chain с SAN, issuer-chain, OCSP staple и SCT реального origin.
+- Где: `REALITY/cert_camouflage.go`, `REALITY/handshake_server_tls13.go`.
+- Остаточный риск: при недоступности origin во время on-demand capture сервер всё ещё откатится к синтетическому сертификату. Кроме того, даже camouflage chain не может быть полностью эквивалентна оригинальной PKI-цепочке без приватных ключей настоящего target.
 
 #### 15. Предсказуемый padding ratio для малых payload
 

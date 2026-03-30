@@ -20,6 +20,9 @@ import (
 )
 
 var GlobalTargetCertProfiles sync.Map
+var GlobalTargetCertProfileMu sync.Map
+
+const targetCertProfileMaxAge = 6 * time.Hour
 
 type TargetCertProfile struct {
 	Certificates                []*x509.Certificate
@@ -127,6 +130,45 @@ func getTargetCertificateProfile(dest, sni string) *TargetCertProfile {
 	return profile
 }
 
+func ensureTargetCertificateProfile(networkType, dest, sni string, show bool) (*TargetCertProfile, error) {
+	if profile := getTargetCertificateProfile(dest, sni); profile != nil && !targetCertProfileExpired(profile) {
+		return profile, nil
+	}
+
+	cacheKey := targetCertProfileKey(dest, sni)
+	muAny, _ := GlobalTargetCertProfileMu.LoadOrStore(cacheKey, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
+	mu.Lock()
+	defer func() {
+		mu.Unlock()
+		GlobalTargetCertProfileMu.Delete(cacheKey)
+	}()
+
+	if profile := getTargetCertificateProfile(dest, sni); profile != nil && !targetCertProfileExpired(profile) {
+		return profile, nil
+	}
+
+	profile, err := captureTargetCertificateProfile(networkType, dest, sni)
+	if err != nil {
+		return nil, err
+	}
+	GlobalTargetCertProfiles.Store(cacheKey, profile)
+	if show {
+		fmt.Printf("REALITY cert camouflage: refreshed %v/%v (%d certs)\n", dest, sni, len(profile.RawCertificates))
+	}
+	return profile, nil
+}
+
+func targetCertProfileExpired(profile *TargetCertProfile) bool {
+	if profile == nil {
+		return true
+	}
+	if profile.CapturedAt.IsZero() {
+		return false
+	}
+	return time.Since(profile.CapturedAt) > targetCertProfileMaxAge
+}
+
 func buildCamouflageCertificate(profile *TargetCertProfile, r io.Reader) (*Certificate, error) {
 	if profile == nil || len(profile.Certificates) == 0 {
 		return nil, fmt.Errorf("missing target certificate profile")
@@ -229,29 +271,29 @@ func cloneCertificateTemplate(real *x509.Certificate) *x509.Certificate {
 	}
 
 	return &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               real.Subject,
-		NotBefore:             real.NotBefore,
-		NotAfter:              real.NotAfter,
-		KeyUsage:              real.KeyUsage,
-		ExtKeyUsage:           append([]x509.ExtKeyUsage(nil), real.ExtKeyUsage...),
-		UnknownExtKeyUsage:    cloneOIDs(real.UnknownExtKeyUsage),
-		BasicConstraintsValid: real.BasicConstraintsValid,
-		IsCA:                  real.IsCA,
-		MaxPathLen:            real.MaxPathLen,
-		MaxPathLenZero:        real.MaxPathLenZero,
-		DNSNames:              append([]string(nil), real.DNSNames...),
-		EmailAddresses:        append([]string(nil), real.EmailAddresses...),
-		IPAddresses:           cloneIPs(real.IPAddresses),
-		URIs:                  cloneURLs(real.URIs),
+		SerialNumber:                serial,
+		Subject:                     real.Subject,
+		NotBefore:                   real.NotBefore,
+		NotAfter:                    real.NotAfter,
+		KeyUsage:                    real.KeyUsage,
+		ExtKeyUsage:                 append([]x509.ExtKeyUsage(nil), real.ExtKeyUsage...),
+		UnknownExtKeyUsage:          cloneOIDs(real.UnknownExtKeyUsage),
+		BasicConstraintsValid:       real.BasicConstraintsValid,
+		IsCA:                        real.IsCA,
+		MaxPathLen:                  real.MaxPathLen,
+		MaxPathLenZero:              real.MaxPathLenZero,
+		DNSNames:                    append([]string(nil), real.DNSNames...),
+		EmailAddresses:              append([]string(nil), real.EmailAddresses...),
+		IPAddresses:                 cloneIPs(real.IPAddresses),
+		URIs:                        cloneURLs(real.URIs),
 		PermittedDNSDomainsCritical: real.PermittedDNSDomainsCritical,
-		PermittedDNSDomains:   append([]string(nil), real.PermittedDNSDomains...),
-		CRLDistributionPoints: append([]string(nil), real.CRLDistributionPoints...),
-		PolicyIdentifiers:     cloneOIDs(real.PolicyIdentifiers),
-		OCSPServer:            append([]string(nil), real.OCSPServer...),
-		IssuingCertificateURL: append([]string(nil), real.IssuingCertificateURL...),
-		SubjectKeyId:          append([]byte(nil), real.SubjectKeyId...),
-		AuthorityKeyId:        append([]byte(nil), real.AuthorityKeyId...),
+		PermittedDNSDomains:         append([]string(nil), real.PermittedDNSDomains...),
+		CRLDistributionPoints:       append([]string(nil), real.CRLDistributionPoints...),
+		PolicyIdentifiers:           cloneOIDs(real.PolicyIdentifiers),
+		OCSPServer:                  append([]string(nil), real.OCSPServer...),
+		IssuingCertificateURL:       append([]string(nil), real.IssuingCertificateURL...),
+		SubjectKeyId:                append([]byte(nil), real.SubjectKeyId...),
+		AuthorityKeyId:              append([]byte(nil), real.AuthorityKeyId...),
 	}
 }
 
