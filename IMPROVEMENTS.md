@@ -122,12 +122,13 @@
   - `MaxLifetime` (default 60s) — макс возраст соединения
   - `MaxBytes` (default 5MB) — макс трафика до ротации
   - `MinLifetime` (default 10s) — минимальное время жизни
-  - `Jitter` (default 15s) — случайное смещение deadline'а
+	- `Jitter` (default 15s) — масштаб разброса lifetime; итоговый deadline выбирается из skewed distribution, а не из равномерного окна
 - `RotatedConn` — враппер `net.Conn`:
   - Отслеживает `bytesIn`/`bytesOut` (atomic int64), `deadline`, `createdAt`
   - `ShouldRotate() bool` — `now > deadline` или `bytes > MaxBytes`
   - `OnRotate(fn)` — callback при необходимости ротации
   - `Read()`/`Write()` — проксируют с подсчётом трафика
+  - `NewRotatedConn()` — сэмплирует connection lifetime из смеси short/typical/long-lived сценариев вместо `MaxLifetime ± Jitter`
 - `SessionManager` — группирует ротированные conn'ы одного клиента (ключ: `ClientShortId` hex)
 - `Session` — мультиплексирует Read через channel, Write в активный conn
 
@@ -362,9 +363,9 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 11. Ненатуральное распределение lifetime соединений
 
-- Проблема: `RotationPolicy` создаёт lifetime в диапазоне около `60s ± 15s`.
+- Что изменено: `RotatedConn` больше не использует равномерный `MaxLifetime ± Jitter`. Lifetime теперь сэмплируется из skewed mixture: часть соединений обрывается заметно раньше baseline, большая часть живёт около типичных значений, а небольшая доля получает более длинный positive tail.
 - Где: `REALITY/conn_rotator.go`.
-- Как детектят: собирают гистограмму длительности TCP-соединений и видят равномерное окно, нехарактерное для обычных HTTPS-клиентов.
+- Остаточный риск: распределение стало менее искусственным, но оно всё ещё синтетическое и не привязано к реальному профилю конкретного приложения или браузера, поэтому на очень больших выборках возможна дальнейшая кластеризация.
 
 #### 12. Multi-SNI redial оставляет TCP-побочные эффекты
 

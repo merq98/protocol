@@ -3,6 +3,8 @@ package reality
 import (
 	"errors"
 	"io"
+	"math"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -24,8 +26,9 @@ type RotationPolicy struct {
 	// Default: 10s.
 	MinLifetime time.Duration
 
-	// Jitter adds randomness to MaxLifetime to avoid synchronized rotation.
-	// Actual lifetime = MaxLifetime ± rand(Jitter).
+	// Jitter controls the spread of the sampled connection lifetime.
+	// The final lifetime is drawn from a skewed distribution around
+	// MaxLifetime rather than from a uniform +/- window.
 	// Default: 15s.
 	Jitter time.Duration
 }
@@ -56,19 +59,120 @@ type RotatedConn struct {
 }
 
 // NewRotatedConn wraps an existing connection with rotation tracking.
-// jitterFn should return a value in [-1.0, 1.0] for jitter; use nil for no jitter.
+// jitterFn can supply deterministic entropy in [-1.0, 1.0]; if nil, an
+// internal random source is used.
 func NewRotatedConn(inner net.Conn, policy RotationPolicy, jitterFn func() float64) *RotatedConn {
-	deadline := time.Now().Add(policy.MaxLifetime)
-	if policy.Jitter > 0 && jitterFn != nil {
-		jitter := time.Duration(jitterFn() * float64(policy.Jitter))
-		deadline = deadline.Add(jitter)
-	}
+	createdAt := time.Now()
+	deadline := createdAt.Add(sampleRotationLifetime(policy, jitterFn))
 	return &RotatedConn{
 		inner:     inner,
 		policy:    policy,
-		createdAt: time.Now(),
+		createdAt: createdAt,
 		deadline:  deadline,
 	}
+}
+
+func sampleRotationLifetime(policy RotationPolicy, jitterFn func() float64) time.Duration {
+	base := policy.MaxLifetime
+	if base <= 0 {
+		base = policy.MinLifetime
+	}
+	if base <= 0 {
+		base = 60 * time.Second
+	}
+
+	minLifetime := policy.MinLifetime
+	if minLifetime <= 0 || minLifetime > base {
+		minLifetime = minRotationDuration(base, 10*time.Second)
+	}
+
+	spread := policy.Jitter
+	if spread < 0 {
+		spread = 0
+	}
+
+	mode := sampleRotationUnit(jitterFn)
+	var lifetime time.Duration
+	switch {
+	case mode < 0.18:
+		lifetime = sampleShortRotationLifetime(minLifetime, base, jitterFn)
+	case mode < 0.82:
+		lifetime = sampleTypicalRotationLifetime(minLifetime, base, spread, jitterFn)
+	default:
+		lifetime = sampleLongRotationLifetime(base, spread, jitterFn)
+	}
+
+	maxLifetime := maxRotationDuration(base+maxRotationDuration(spread*3, base/3), minLifetime)
+	return clampDuration(lifetime, minLifetime, maxLifetime)
+}
+
+func sampleShortRotationLifetime(minLifetime, base time.Duration, jitterFn func() float64) time.Duration {
+	if base <= minLifetime {
+		return base
+	}
+	span := base - minLifetime
+	weight := 0.20 + math.Pow(sampleRotationUnit(jitterFn), 1.7)*0.55
+	return minLifetime + time.Duration(weight*float64(span))
+}
+
+func sampleTypicalRotationLifetime(minLifetime, base, spread time.Duration, jitterFn func() float64) time.Duration {
+	leftSpan := maxRotationDuration(spread, (base-minLifetime)/2)
+	low := maxRotationDuration(minLifetime, base-leftSpan)
+	high := base + spread/2
+	if high < low {
+		high = low
+	}
+
+	u1 := sampleRotationUnit(jitterFn)
+	u2 := sampleRotationUnit(jitterFn)
+	u3 := sampleRotationUnit(jitterFn)
+	triangular := (u1 + u2 + u3) / 3
+	skewed := math.Pow(triangular, 1.35)
+	return low + time.Duration(skewed*float64(high-low))
+}
+
+func sampleLongRotationLifetime(base, spread time.Duration, jitterFn func() float64) time.Duration {
+	tail := maxRotationDuration(spread*2, base/4)
+	weight := 0.25 + math.Pow(sampleRotationUnit(jitterFn), 0.65)*1.15
+	return base + time.Duration(weight*float64(tail))
+}
+
+func sampleRotationUnit(jitterFn func() float64) float64 {
+	if jitterFn == nil {
+		return rand.Float64()
+	}
+	value := (jitterFn() + 1) / 2
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
+}
+
+func clampDuration(value, low, high time.Duration) time.Duration {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
+}
+
+func minRotationDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxRotationDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // OnRotate sets a callback invoked when the connection needs rotation.
@@ -158,9 +262,9 @@ func (rc *RotatedConn) Close() error {
 	return rc.inner.Close()
 }
 
-func (rc *RotatedConn) LocalAddr() net.Addr              { return rc.inner.LocalAddr() }
-func (rc *RotatedConn) RemoteAddr() net.Addr             { return rc.inner.RemoteAddr() }
-func (rc *RotatedConn) SetDeadline(t time.Time) error    { return rc.inner.SetDeadline(t) }
+func (rc *RotatedConn) LocalAddr() net.Addr                { return rc.inner.LocalAddr() }
+func (rc *RotatedConn) RemoteAddr() net.Addr               { return rc.inner.RemoteAddr() }
+func (rc *RotatedConn) SetDeadline(t time.Time) error      { return rc.inner.SetDeadline(t) }
 func (rc *RotatedConn) SetReadDeadline(t time.Time) error  { return rc.inner.SetReadDeadline(t) }
 func (rc *RotatedConn) SetWriteDeadline(t time.Time) error { return rc.inner.SetWriteDeadline(t) }
 
@@ -183,14 +287,14 @@ func NewSessionManager(policy RotationPolicy) *SessionManager {
 
 // Session represents a logical session spanning multiple rotated connections.
 type Session struct {
-	mu       sync.Mutex
-	id       string
-	conns    []*RotatedConn
-	active   *RotatedConn
-	dataCh   chan []byte
-	closed   bool
-	closeCh  chan struct{}
-	policy   RotationPolicy
+	mu      sync.Mutex
+	id      string
+	conns   []*RotatedConn
+	active  *RotatedConn
+	dataCh  chan []byte
+	closed  bool
+	closeCh chan struct{}
+	policy  RotationPolicy
 }
 
 // Bind adds a new REALITY connection to a session. If the session doesn't
