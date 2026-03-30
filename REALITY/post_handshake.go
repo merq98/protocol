@@ -92,12 +92,38 @@ func (hs *serverHandshakeStateTLS13) startRandomizedPostHandshakeTickets(dest st
 		}
 	}
 
-	go func(c *Conn) {
+	scheduler := hs.c.initPostHandshakeTicketScheduler()
+
+	go func(c *Conn, scheduler *postHandshakeTicketScheduler) {
 		r := c.config.rand()
 
-		initialDelay, err := randomDurationRange(r, 25*time.Millisecond, 220*time.Millisecond)
-		if err == nil && initialDelay > 0 {
-			time.Sleep(initialDelay)
+		fallbackDelay, err := randomDurationRange(r, 450*time.Millisecond, 2500*time.Millisecond)
+		if err != nil {
+			fallbackDelay = time.Second
+		}
+
+		var initialDelay time.Duration
+		select {
+		case <-scheduler.stop:
+			return
+		case <-scheduler.appData:
+			initialDelay, err = randomDurationRange(r, 60*time.Millisecond, 320*time.Millisecond)
+			if err != nil {
+				initialDelay = 120 * time.Millisecond
+			}
+		case <-time.After(fallbackDelay):
+			initialDelay, err = randomDurationRange(r, 120*time.Millisecond, 600*time.Millisecond)
+			if err != nil {
+				initialDelay = 250 * time.Millisecond
+			}
+		}
+
+		if initialDelay > 0 {
+			select {
+			case <-scheduler.stop:
+				return
+			case <-time.After(initialDelay):
+			}
 		}
 
 		count, err := randomizedTicketCount(r, observed)
@@ -110,16 +136,25 @@ func (hs *serverHandshakeStateTLS13) startRandomizedPostHandshakeTickets(dest st
 			if err != nil {
 				return
 			}
+			select {
+			case <-scheduler.stop:
+				return
+			default:
+			}
 			if err := c.sendSessionTicket(false, extra); err != nil {
 				return
 			}
 			if i+1 >= count {
 				return
 			}
-			delay, err := randomDurationRange(r, 15*time.Millisecond, 90*time.Millisecond)
+			delay, err := randomDurationRange(r, 90*time.Millisecond, 650*time.Millisecond)
 			if err == nil && delay > 0 {
-				time.Sleep(delay)
+				select {
+				case <-scheduler.stop:
+					return
+				case <-time.After(delay):
+				}
 			}
 		}
-	}(hs.c)
+	}(hs.c, scheduler)
 }

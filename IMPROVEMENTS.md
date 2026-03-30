@@ -333,9 +333,9 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 6. Synchronous NST сразу после Finished
 
-- Проблема: post-handshake records отправляются подряд сразу после Finished, без естественного перемешивания с application data.
-- Где: `REALITY/tls.go`.
-- Как детектят: сравнивают порядок записей с реальными HTTPS-серверами, у которых NST часто приходит позже и не так синхронно.
+- Что изменено: отправка `NewSessionTicket` больше не стартует немедленно после `Finished`. Теперь tickets планируются через post-handshake scheduler: они уходят после первого реального `ApplicationData` от сервера или по более позднему fallback-таймеру для idle-соединений, с увеличенными промежутками между ticket'ами и остановкой scheduler при `closeNotify`/`Close`.
+- Где: `REALITY/post_handshake.go`, `REALITY/conn.go`, `REALITY/tls.go`.
+- Остаточный риск: порядок post-handshake records стал ближе к публичным HTTPS-серверам, но без полноценной привязки к конкретному upstream-приложению и его шаблону ответа timing `NST` всё ещё может отличаться на длинных сериях активных проб.
 
 #### 7. Padding применяется только к ApplicationData
 

@@ -130,7 +130,48 @@ type Conn struct {
 	// the rest of the bits are the number of goroutines in Conn.Write.
 	activeCall atomic.Int32
 
+	postHandshakeTickets *postHandshakeTicketScheduler
+
 	tmp [16]byte
+}
+
+type postHandshakeTicketScheduler struct {
+	appData     chan struct{}
+	stop        chan struct{}
+	appDataOnce sync.Once
+	stopOnce    sync.Once
+}
+
+func newPostHandshakeTicketScheduler() *postHandshakeTicketScheduler {
+	return &postHandshakeTicketScheduler{
+		appData: make(chan struct{}),
+		stop:    make(chan struct{}),
+	}
+}
+
+func (c *Conn) initPostHandshakeTicketScheduler() *postHandshakeTicketScheduler {
+	if c.postHandshakeTickets == nil {
+		c.postHandshakeTickets = newPostHandshakeTicketScheduler()
+	}
+	return c.postHandshakeTickets
+}
+
+func (c *Conn) signalPostHandshakeApplicationData() {
+	if c == nil || c.postHandshakeTickets == nil {
+		return
+	}
+	c.postHandshakeTickets.appDataOnce.Do(func() {
+		close(c.postHandshakeTickets.appData)
+	})
+}
+
+func (c *Conn) stopPostHandshakeTicketScheduler() {
+	if c == nil || c.postHandshakeTickets == nil {
+		return
+	}
+	c.postHandshakeTickets.stopOnce.Do(func() {
+		close(c.postHandshakeTickets.stop)
+	})
 }
 
 // Access to net.Conn methods.
@@ -1099,6 +1140,9 @@ func (c *Conn) writeRecordLocked(typ recordType, data []byte) (int, error) {
 			return n, c.sendAlertLocked(err.(alert))
 		}
 	}
+	if typ == recordTypeApplicationData && n > 0 {
+		c.signalPostHandshakeApplicationData()
+	}
 
 	return n, nil
 }
@@ -1504,6 +1548,8 @@ func (c *Conn) Read(b []byte) (int, error) {
 
 // Close closes the connection.
 func (c *Conn) Close() error {
+	c.stopPostHandshakeTicketScheduler()
+
 	// Interlock with Conn.Write above.
 	var x int32
 	for {
@@ -1554,6 +1600,7 @@ func (c *Conn) CloseWrite() error {
 func (c *Conn) closeNotify() error {
 	c.out.Lock()
 	defer c.out.Unlock()
+	c.stopPostHandshakeTicketScheduler()
 
 	if !c.closeNotifySent {
 		// Set a Write Deadline to prevent possibly blocking forever.
