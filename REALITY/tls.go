@@ -434,7 +434,15 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 		// Track when we start waiting for target data — the first
 		// successful read gives us the target RTT estimate.
 		targetReadStart := time.Now()
-		var targetFirstResponse time.Time
+		var targetRTTOnce sync.Once
+		recordObservedTargetRTT := func() {
+			if config.Timing == nil {
+				return
+			}
+			targetRTTOnce.Do(func() {
+				config.Timing.RecordTargetRTT(time.Since(targetReadStart))
+			})
+		}
 
 	f:
 		for {
@@ -454,13 +462,7 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 					}
 					continue
 				}
-				if targetFirstResponse.IsZero() {
-					targetFirstResponse = time.Now()
-					// Feed the timing normalizer with the target RTT
-					if config.Timing != nil {
-						config.Timing.RecordTargetRTT(targetFirstResponse.Sub(targetReadStart))
-					}
-				}
+				recordObservedTargetRTT()
 				mutex.Lock()
 				s2cSaved = append(s2cSaved, buf[:n]...)
 			}
@@ -537,6 +539,9 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 					io.ReadFull(target, buf[:handshakeLen-len(s2cSaved)])
 				}
 				if n, err := target.Read(buf); !hs.c.isHandshakeComplete.Load() {
+					if n > 0 {
+						recordObservedTargetRTT()
+					}
 					if err != nil {
 						conn.Close()
 					}
@@ -558,10 +563,6 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 			// proxied handshakes from DPI timing analysis.
 			if config.Timing != nil {
 				config.Timing.Sleep(time.Since(targetReadStart))
-			}
-			key := postHandshakeProfileKey(effectiveDest, hs.clientHello)
-			if maxUseless, ok := GlobalMaxCSSMsgCount.Load(key); ok {
-				hs.c.MaxUselessRecords = maxUseless.(int)
 			}
 			// Enable H2 padding for application data if configured
 			if config.H2Padding != nil {
