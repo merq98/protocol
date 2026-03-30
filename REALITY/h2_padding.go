@@ -45,6 +45,17 @@ type H2Padder struct {
 	// FullFrameChance is the probability [0.0, 1.0] of padding near a
 	// full-size data frame once the payload is already large enough.
 	FullFrameChance float64
+
+	// SmallPayloadRatioRange controls the relative padding budget used for
+	// small plaintexts. Instead of rounding tiny payloads into a few fixed
+	// buckets, the padder samples an additive target from a floating ratio
+	// range to reduce repeated padding/payload clusters.
+	SmallPayloadRatioRange [2]float64
+
+	// SmallPayloadAbsoluteJitter adds an absolute additive budget for tiny
+	// payloads so records with similar payload sizes do not converge to the
+	// same ratio clusters.
+	SmallPayloadAbsoluteJitter [2]int
 }
 
 // Common HTTP/2 payload sizes at the TLS record level.
@@ -66,11 +77,13 @@ func NewH2Padder() *H2Padder {
 	sizes := make([]int, len(defaultH2FrameSizes))
 	copy(sizes, defaultH2FrameSizes)
 	return &H2Padder{
-		enabled:          true,
-		FrameSizes:       sizes,
-		SmallFrameChance: 0.05,
-		WindowJitter:     0.12,
-		FullFrameChance:  0.35,
+		enabled:                    true,
+		FrameSizes:                 sizes,
+		SmallFrameChance:           0.05,
+		WindowJitter:               0.12,
+		FullFrameChance:            0.35,
+		SmallPayloadRatioRange:     [2]float64{0.45, 2.40},
+		SmallPayloadAbsoluteJitter: [2]int{12, 160},
 	}
 }
 
@@ -269,32 +282,70 @@ func (p *H2Padder) pickTargetInWindowLocked(payloadLen, index int, anchors []int
 	}
 
 	if payloadLen < 128 {
-		step := smallPayloadStep(payloadLen)
-		low = roundUp(low, step)
-		high -= high % step
-		if low > high {
-			low = payloadLen + 1
-			high = low
+		if target := p.pickSmallPayloadTargetLocked(payloadLen, low, high, anchor, limit); target > payloadLen {
+			return target
 		}
-		if high <= payloadLen {
-			return 0
-		}
-		count := ((high - low) / step) + 1
-		return low + rand.IntN(count)*step
 	}
 
 	return low + rand.IntN(high-low+1)
 }
 
-func smallPayloadStep(payloadLen int) int {
-	switch {
-	case payloadLen <= 32:
-		return 2
-	case payloadLen <= 96:
-		return 4
-	default:
-		return 8
+func (p *H2Padder) pickSmallPayloadTargetLocked(payloadLen, low, high, anchor, limit int) int {
+	ratioLow, ratioHigh := p.SmallPayloadRatioRange[0], p.SmallPayloadRatioRange[1]
+	if ratioLow <= 0 {
+		ratioLow = 0.35
 	}
+	if ratioHigh < ratioLow {
+		ratioHigh = ratioLow
+	}
+
+	absLow, absHigh := p.SmallPayloadAbsoluteJitter[0], p.SmallPayloadAbsoluteJitter[1]
+	if absLow < 0 {
+		absLow = 0
+	}
+	if absHigh < absLow {
+		absHigh = absLow
+	}
+
+	ratio := ratioLow
+	if ratioHigh > ratioLow {
+		ratio = ratioLow + rand.Float64()*(ratioHigh-ratioLow)
+	}
+	additive := absLow
+	if absHigh > absLow {
+		additive += rand.IntN(absHigh - absLow + 1)
+	}
+
+	target := payloadLen + additive + int(float64(payloadLen)*ratio)
+	if payloadLen <= 24 {
+		target += rand.IntN(24)
+	} else if payloadLen <= 64 {
+		target += rand.IntN(40)
+	}
+
+	if anchor > payloadLen && rand.Float64() < 0.20 {
+		blendLow := max(payloadLen+1, anchor-max(12, anchor/5))
+		blendHigh := min(limit, anchor+max(16, anchor/4))
+		if blendHigh >= blendLow {
+			target = blendLow + rand.IntN(blendHigh-blendLow+1)
+		}
+	}
+
+	target = clampPaddingInt(target, low, high)
+	if target <= payloadLen {
+		return 0
+	}
+	return target
+}
+
+func clampPaddingInt(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
 }
 
 func maxFloat(a, b float64) float64 {
