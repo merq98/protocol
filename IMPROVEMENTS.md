@@ -375,9 +375,9 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 13. SessionID и auth-path корреляции
 
-- Проблема: `sessionId` участвует в auth-механике и создаёт отличающийся паттерн между обычным и auth path.
-- Где: `REALITY/tls.go`, участок с `aead.Open()` над `hs.clientHello.sessionId`.
-- Как детектят: ищут статистические корреляции между размером, длиной и использованием Session ID в auth-сессиях.
+- Что изменено: auth payload больше не жёстко привязан к legacy `sessionId`. Сервер теперь в первую очередь принимает 32-байтный carrier из `session_ticket` extension и использует `sessionId` только как compatibility fallback для старых клиентов.
+- Где: `REALITY/tls.go`.
+- Остаточный риск: для клиентов, которые ещё шлют auth-данные через `sessionId`, старая корреляция сохраняется до обновления клиентской стороны. После миграции на `session_ticket` auth path перестаёт зависеть от специального содержимого SessionID.
 
 #### 14. Отсутствие некоторых признаков реального публичного TLS
 

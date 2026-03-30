@@ -61,6 +61,21 @@ type CloseWriteConn interface {
 	CloseWrite() error
 }
 
+const realityAuthPayloadSize = 32
+
+func realityAuthPayload(clientHello *clientHelloMsg) []byte {
+	if clientHello == nil {
+		return nil
+	}
+	if len(clientHello.sessionTicket) == realityAuthPayloadSize {
+		return clientHello.sessionTicket
+	}
+	if len(clientHello.sessionId) == realityAuthPayloadSize {
+		return clientHello.sessionId
+	}
+	return nil
+}
+
 type MirrorConn struct {
 	*sync.Mutex
 	net.Conn
@@ -347,19 +362,20 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 				if _, err = hkdf.New(sha256.New, hs.c.AuthKey, hs.clientHello.random[:20], []byte("REALITY")).Read(hs.c.AuthKey); err != nil {
 					break
 				}
+				authPayload := realityAuthPayload(hs.clientHello)
+				if len(authPayload) != realityAuthPayloadSize {
+					break
+				}
 				block, _ := aes.NewCipher(hs.c.AuthKey)
 				aead, _ := cipher.NewGCM(block)
 				if config.Show {
 					fmt.Printf("REALITY remoteAddr: %v\ths.c.AuthKey[:16]: %v\tAEAD: %T\n", remoteAddr, hs.c.AuthKey[:16], aead)
 				}
-				ciphertext := make([]byte, 32)
-				plainText := make([]byte, 32)
-				copy(ciphertext, hs.clientHello.sessionId)
-				copy(hs.clientHello.sessionId, plainText) // hs.clientHello.sessionId points to hs.clientHello.raw[39:]
+				ciphertext := append([]byte(nil), authPayload...)
+				plainText := make([]byte, realityAuthPayloadSize)
 				if _, err = aead.Open(plainText[:0], hs.clientHello.random[20:], ciphertext, hs.clientHello.original); err != nil {
 					break
 				}
-				copy(hs.clientHello.sessionId, ciphertext)
 				copy(hs.c.ClientVer[:], plainText)
 				hs.c.ClientTime = time.Unix(int64(binary.BigEndian.Uint32(plainText[4:])), 0)
 				copy(hs.c.ClientShortId[:], plainText[8:])
