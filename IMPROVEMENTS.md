@@ -173,13 +173,12 @@
 **Реализация:** `REALITY/timing_normalizer.go`
 
 - `TimingNormalizer` — выравниватель хронометража handshake:
-  - `avgTargetRTT` — экспоненциальное скользящее среднее (EMA) RTT до target'а
-  - `alpha float64` (default 0.3) — фактор сглаживания EMA
-  - `minSamples int` (default 3) — минимум замеров перед включением
-  - `jitter float64` (default 0.15) — ±15% от `avgTargetRTT`
+  - `avgTargetRTT` — адаптивный baseline RTT до target'а, обновляемый с плавающим коэффициентом сглаживания
+  - `alpha/minSamples/jitter` — больше не фиксированные константы; профиль выбирается из bounded ranges и периодически ретюнится по волатильности live RTT
+  - `recentRTTs` — rolling window живых RTT-сэмплов для эмпирического распределения задержек
   - `BaseDelay` — фиксированный минимальный delay
-- `RecordTargetRTT(rtt)` — обновить EMA после каждого proxy round-trip
-- `Delay(elapsed) time.Duration` — сколько ждать: `max(0, targetRTT ± jitter - elapsed)`
+- `RecordTargetRTT(rtt)` — обновить adaptive baseline и empirical RTT window после каждого proxy round-trip
+- `Delay(elapsed) time.Duration` — выбрать задержку из live RTT window с adaptive jitter/spike, а не по одной жёсткой EMA-кривой
 - `Sleep(elapsed)` — блокирует на `Delay(elapsed)`
 
 **Интеграция:**
@@ -351,15 +350,15 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 9. Детерминированная ротация target'ов
 
-- Проблема: round-robin или time-based rotation может создавать предсказуемую последовательность target'ов.
+- Что изменено: deterministic round-robin/time-slice rotation удалена. `TargetPool` теперь выбирает fallback-target случайно, с anti-repeat bias и soft cooldown через `rotateInterval`, чтобы последовательность не складывалась в повторяемый цикл A→B→C.
 - Где: `REALITY/target_pool.go`.
-- Как детектят: наблюдают, что сервер ходит к target A, затем B, затем C по повторяемому шаблону.
+- Остаточный риск: повторяемая последовательность устранена, но при малом числе target'ов и долгом наблюдении распределение выбора всё ещё можно статистически оценивать, особенно если один и тот же SNI стабильно попадает в `PickBySNI`.
 
 #### 10. Узнаваемая кривая EMA в timing normalization
 
-- Проблема: `TimingNormalizer` использует фиксированные параметры `alpha = 0.3`, `minSamples = 3`, `jitter = 0.15`.
+- Что изменено: `TimingNormalizer` больше не держит фиксированные `alpha`, `minSamples` и `jitter`. Профиль теперь выбирается из ограниченных диапазонов при создании, периодически ретюнится по волатильности живых RTT и применяет per-sample adaptive smoothing вместо одной стабильной EMA-кривой.
 - Где: `REALITY/timing_normalizer.go`.
-- Как детектят: по первым соединениям и последующей сходимости таймингов можно подогнать модель EMA.
+- Остаточный риск: timing profile стал хуже поддаваться подгонке под одну модель, но сам факт локальной нормализации всё ещё можно статистически исследовать на очень длинных сериях, особенно если upstream RTT мало меняется.
 
 #### 11. Ненатуральное распределение lifetime соединений
 

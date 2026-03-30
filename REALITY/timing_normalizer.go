@@ -19,20 +19,35 @@ import (
 type TimingNormalizer struct {
 	mu sync.RWMutex
 
-	// Running average of measured target RTTs (exponentially weighted).
+	// Running baseline of measured target RTTs.
 	avgTargetRTT time.Duration
 
-	// Smoothing factor for exponential moving average (0..1).
-	// Lower = smoother, higher = more reactive. Default: 0.3.
-	alpha float64
+	// alpha is the current smoothing factor. It is not fixed: the value is
+	// periodically retuned and also perturbed per-sample based on observed RTT
+	// volatility so the convergence curve does not fit a single EMA profile.
+	alpha      float64
+	alphaFloor float64
+	alphaCeil  float64
 
 	// Minimum samples before the normalizer starts applying delays.
+	// Like alpha, this is a live profile value chosen from a bounded range.
 	minSamples int
 	samples    int
 
-	// Jitter range as a fraction of the target RTT.
-	// Final delay = targetRTT ± jitter*targetRTT. Default: 0.15.
+	minSamplesFloor int
+	minSamplesCeil  int
+
+	// jitter is the current relative spread as a fraction of the target RTT.
+	// It is continuously retuned inside a configured range instead of staying
+	// at a single constant like 0.15.
 	jitter float64
+
+	jitterFloor float64
+	jitterCeil  float64
+
+	retuneMinSamples  int
+	retuneMaxSamples  int
+	retuneAfterSample int
 
 	// BaseDelay is a fixed minimum delay added to all responses.
 	// Simulates network latency floor. Default: 0.
@@ -58,15 +73,22 @@ type TimingNormalizer struct {
 
 // NewTimingNormalizer creates a normalizer with sensible defaults.
 func NewTimingNormalizer() *TimingNormalizer {
-	return &TimingNormalizer{
-		alpha:            0.3,
-		minSamples:       3,
-		jitter:           0.15,
+	tn := &TimingNormalizer{
+		alphaFloor:       0.18,
+		alphaCeil:        0.52,
+		minSamplesFloor:  2,
+		minSamplesCeil:   6,
+		jitterFloor:      0.10,
+		jitterCeil:       0.28,
+		retuneMinSamples: 8,
+		retuneMaxSamples: 20,
 		minJitter:        8 * time.Millisecond,
 		spikeChance:      0.12,
 		maxRecentSamples: 32,
 		enabled:          true,
 	}
+	tn.retuneProfileLocked()
+	return tn
 }
 
 // RecordTargetRTT records a measured RTT to the target. Call this after
@@ -83,12 +105,12 @@ func (tn *TimingNormalizer) RecordTargetRTT(rtt time.Duration) {
 	if tn.samples == 1 {
 		tn.avgTargetRTT = rtt
 	} else {
-		// Exponential moving average
-		tn.avgTargetRTT = time.Duration(
-			float64(tn.avgTargetRTT)*(1-tn.alpha) + float64(rtt)*tn.alpha,
-		)
+		tn.avgTargetRTT = blendDuration(tn.avgTargetRTT, rtt, tn.sampleAlphaLocked(rtt))
 	}
 	tn.recordRecentRTTLocked(rtt)
+	if tn.samples == 1 || tn.samples >= tn.retuneAfterSample {
+		tn.retuneProfileLocked()
+	}
 }
 
 // TargetRTT returns the current estimated target RTT.
@@ -115,8 +137,8 @@ func (tn *TimingNormalizer) Delay(elapsed time.Duration) time.Duration {
 	target := tn.sampleTargetRTTLocked() + tn.BaseDelay
 
 	spread := tn.minJitter
-	if tn.jitter > 0 {
-		relativeSpread := time.Duration(float64(target) * tn.jitter)
+	if jitter := tn.sampleJitterLocked(); jitter > 0 {
+		relativeSpread := time.Duration(float64(target) * jitter)
 		if relativeSpread > spread {
 			spread = relativeSpread
 		}
@@ -156,7 +178,18 @@ func (tn *TimingNormalizer) SetEnabled(enabled bool) {
 // SetJitter sets the jitter fraction (0..1).
 func (tn *TimingNormalizer) SetJitter(j float64) {
 	tn.mu.Lock()
-	tn.jitter = j
+	if j <= 0 {
+		tn.jitter = 0
+		tn.jitterFloor = 0
+		tn.jitterCeil = 0
+		tn.mu.Unlock()
+		return
+	}
+
+	base := clampFloat(j, 0.02, 0.50)
+	tn.jitterFloor = clampFloat(base*0.75, 0.02, 0.50)
+	tn.jitterCeil = clampFloat(maxFloat(base*1.25, tn.jitterFloor), tn.jitterFloor, 0.50)
+	tn.retuneProfileLocked()
 	tn.mu.Unlock()
 }
 
@@ -167,6 +200,7 @@ func (tn *TimingNormalizer) Reset() {
 	tn.avgTargetRTT = 0
 	tn.recentRTTs = nil
 	tn.recentRTTIndex = 0
+	tn.retuneProfileLocked()
 	tn.mu.Unlock()
 }
 
@@ -186,7 +220,121 @@ func (tn *TimingNormalizer) sampleTargetRTTLocked() time.Duration {
 	if len(tn.recentRTTs) == 0 {
 		return tn.avgTargetRTT
 	}
-	return tn.recentRTTs[rand.IntN(len(tn.recentRTTs))]
+
+	picked := tn.recentRTTs[rand.IntN(len(tn.recentRTTs))]
+	if tn.avgTargetRTT <= 0 || rand.Float64() < 0.7 {
+		return picked
+	}
+
+	blend := 0.20 + rand.Float64()*0.45
+	return blendDuration(picked, tn.avgTargetRTT, blend)
+}
+
+func (tn *TimingNormalizer) sampleAlphaLocked(rtt time.Duration) float64 {
+	if tn.avgTargetRTT <= 0 {
+		return tn.alpha
+	}
+
+	baseline := float64(maxDuration(tn.avgTargetRTT, time.Millisecond))
+	deviation := float64(absDuration(rtt-tn.avgTargetRTT)) / baseline
+	volatility := tn.sampleVolatilityLocked()
+	alpha := tn.alpha + deviation*0.25 + volatility*0.20 + (rand.Float64()-0.5)*0.08
+	return clampFloat(alpha, tn.alphaFloor, tn.alphaCeil)
+}
+
+func (tn *TimingNormalizer) sampleJitterLocked() float64 {
+	if tn.jitterCeil <= 0 {
+		return 0
+	}
+
+	volatility := tn.sampleVolatilityLocked()
+	jitter := tn.jitter + volatility*0.20 + (rand.Float64()-0.5)*0.04
+	return clampFloat(jitter, tn.jitterFloor, tn.jitterCeil)
+}
+
+func (tn *TimingNormalizer) retuneProfileLocked() {
+	volatility := tn.sampleVolatilityLocked()
+
+	alphaLow := clampFloat(0.18+volatility*0.16, tn.alphaFloor, tn.alphaCeil)
+	alphaHigh := clampFloat(0.32+volatility*0.24, alphaLow, tn.alphaCeil)
+	tn.alpha = randomFloatInRange(alphaLow, alphaHigh)
+
+	minLow := tn.minSamplesFloor
+	if volatility < 0.08 {
+		minLow++
+	}
+	if volatility < 0.03 {
+		minLow++
+	}
+	minLow = clampInt(minLow, tn.minSamplesFloor, tn.minSamplesCeil)
+	minHigh := clampInt(minLow+2, minLow, tn.minSamplesCeil)
+	tn.minSamples = randomIntInRange(minLow, minHigh)
+
+	jitterLow := clampFloat(maxFloat(tn.jitterFloor, 0.09+volatility*0.20), 0, tn.jitterCeil)
+	jitterHigh := clampFloat(jitterLow+0.06+volatility*0.12, jitterLow, tn.jitterCeil)
+	tn.jitter = randomFloatInRange(jitterLow, jitterHigh)
+
+	retuneIn := randomIntInRange(tn.retuneMinSamples, tn.retuneMaxSamples)
+	tn.retuneAfterSample = tn.samples + retuneIn
+}
+
+func (tn *TimingNormalizer) sampleVolatilityLocked() float64 {
+	if len(tn.recentRTTs) < 2 || tn.avgTargetRTT <= 0 {
+		return 0
+	}
+
+	baseline := float64(maxDuration(tn.avgTargetRTT, time.Millisecond))
+	var total float64
+	for _, sample := range tn.recentRTTs {
+		total += float64(absDuration(sample-tn.avgTargetRTT)) / baseline
+	}
+	return total / float64(len(tn.recentRTTs))
+}
+
+func blendDuration(base, sample time.Duration, alpha float64) time.Duration {
+	alpha = clampFloat(alpha, 0, 1)
+	return time.Duration(float64(base)*(1-alpha) + float64(sample)*alpha)
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+func randomFloatInRange(low, high float64) float64 {
+	if high <= low {
+		return low
+	}
+	return low + rand.Float64()*(high-low)
+}
+
+func randomIntInRange(low, high int) int {
+	if high <= low {
+		return low
+	}
+	return low + rand.IntN(high-low+1)
+}
+
+func clampFloat(value, low, high float64) float64 {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
+}
+
+func clampInt(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
 }
 
 func maxDuration(a, b time.Duration) time.Duration {

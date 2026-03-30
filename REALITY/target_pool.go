@@ -3,7 +3,6 @@ package reality
 import (
 	"math/rand/v2"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -21,16 +20,16 @@ type TargetPool struct {
 	targets []Target
 	mu      sync.RWMutex
 
-	// Round-robin counter
-	counter atomic.Uint64
-
-	// Time-based rotation
+	// rotateInterval, when non-zero, is treated as a soft cooldown window
+	// for recently picked targets instead of a deterministic time slice.
 	rotateInterval time.Duration
-	startTime      time.Time
+	lastPickedAt   []time.Time
+	lastPickIndex  int
 }
 
 // NewTargetPool creates a new TargetPool from a list of targets.
-// If rotateInterval > 0, targets rotate based on time; otherwise round-robin is used.
+// If rotateInterval > 0, it acts as a soft cooldown window for recently
+// picked targets; otherwise selection still uses randomized anti-repeat.
 func NewTargetPool(targets []Target, rotateInterval time.Duration) *TargetPool {
 	if len(targets) == 0 {
 		return nil
@@ -38,17 +37,18 @@ func NewTargetPool(targets []Target, rotateInterval time.Duration) *TargetPool {
 	return &TargetPool{
 		targets:        targets,
 		rotateInterval: rotateInterval,
-		startTime:      time.Now(),
+		lastPickedAt:   make([]time.Time, len(targets)),
+		lastPickIndex:  -1,
 	}
 }
 
 // Pick selects a target for the given SNI.
 // Priority:
 //  1. If clientSNI matches a specific target's ServerNames, return that target.
-//  2. Otherwise, rotate among all targets (time-based or round-robin).
+//  2. Otherwise, choose a randomized fallback target with anti-repeat bias.
 func (tp *TargetPool) Pick(clientSNI string) *Target {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
 
 	if len(tp.targets) == 0 {
 		return nil
@@ -57,33 +57,25 @@ func (tp *TargetPool) Pick(clientSNI string) *Target {
 	// First: exact SNI match
 	for i := range tp.targets {
 		if tp.targets[i].ServerNames[clientSNI] {
+			tp.markPickedLocked(i)
 			return &tp.targets[i]
 		}
 	}
 
-	// Second: rotation strategy
-	var idx int
-	if tp.rotateInterval > 0 {
-		// Time-based: switch target every rotateInterval
-		elapsed := time.Since(tp.startTime)
-		idx = int(elapsed/tp.rotateInterval) % len(tp.targets)
-	} else {
-		// Round-robin
-		idx = int(tp.counter.Add(1)-1) % len(tp.targets)
-	}
-
+	idx := tp.pickFallbackIndexLocked()
 	return &tp.targets[idx]
 }
 
 // PickRandom selects a random target from the pool.
 func (tp *TargetPool) PickRandom() *Target {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
 
 	if len(tp.targets) == 0 {
 		return nil
 	}
-	return &tp.targets[rand.IntN(len(tp.targets))]
+	idx := tp.pickFallbackIndexLocked()
+	return &tp.targets[idx]
 }
 
 // AllServerNames returns a merged map of all server names across all targets.
@@ -126,12 +118,59 @@ func (tp *TargetPool) Len() int {
 // PickBySNI returns the target whose ServerNames contains the given SNI.
 // Returns nil if no match found.
 func (tp *TargetPool) PickBySNI(sni string) *Target {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
 	for i := range tp.targets {
 		if tp.targets[i].ServerNames[sni] {
+			tp.markPickedLocked(i)
 			return &tp.targets[i]
 		}
 	}
 	return nil
+}
+
+func (tp *TargetPool) pickFallbackIndexLocked() int {
+	if len(tp.targets) == 1 {
+		tp.markPickedLocked(0)
+		return 0
+	}
+
+	now := time.Now()
+	candidates := make([]int, 0, len(tp.targets))
+	for i := range tp.targets {
+		if tp.lastPickIndex >= 0 && len(tp.targets) > 1 && i == tp.lastPickIndex {
+			continue
+		}
+		if tp.rotateInterval > 0 {
+			last := tp.lastPickedAt[i]
+			if !last.IsZero() && now.Sub(last) < tp.rotateInterval {
+				continue
+			}
+		}
+		candidates = append(candidates, i)
+	}
+
+	if len(candidates) == 0 {
+		for i := range tp.targets {
+			if tp.lastPickIndex >= 0 && len(tp.targets) > 1 && i == tp.lastPickIndex {
+				continue
+			}
+			candidates = append(candidates, i)
+		}
+	}
+	if len(candidates) == 0 {
+		candidates = append(candidates, tp.lastPickIndex)
+	}
+
+	idx := candidates[rand.IntN(len(candidates))]
+	tp.markPickedLocked(idx)
+	return idx
+}
+
+func (tp *TargetPool) markPickedLocked(idx int) {
+	if idx < 0 || idx >= len(tp.targets) {
+		return
+	}
+	tp.lastPickIndex = idx
+	tp.lastPickedAt[idx] = time.Now()
 }
