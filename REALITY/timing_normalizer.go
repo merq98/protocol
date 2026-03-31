@@ -49,6 +49,13 @@ type TimingNormalizer struct {
 	retuneMaxSamples  int
 	retuneAfterSample int
 
+	// bootstrapJitter and bootstrapTailScale are used before enough live RTT
+	// samples are collected. Instead of disabling normalization entirely for
+	// the first few connections, the normalizer derives a wider provisional
+	// delay distribution from the first observed RTT samples.
+	bootstrapJitter    float64
+	bootstrapTailScale float64
+
 	// BaseDelay is a fixed minimum delay added to all responses.
 	// Simulates network latency floor. Default: 0.
 	BaseDelay time.Duration
@@ -74,18 +81,20 @@ type TimingNormalizer struct {
 // NewTimingNormalizer creates a normalizer with sensible defaults.
 func NewTimingNormalizer() *TimingNormalizer {
 	tn := &TimingNormalizer{
-		alphaFloor:       0.18,
-		alphaCeil:        0.52,
-		minSamplesFloor:  2,
-		minSamplesCeil:   6,
-		jitterFloor:      0.10,
-		jitterCeil:       0.28,
-		retuneMinSamples: 8,
-		retuneMaxSamples: 20,
-		minJitter:        8 * time.Millisecond,
-		spikeChance:      0.12,
-		maxRecentSamples: 32,
-		enabled:          true,
+		alphaFloor:         0.18,
+		alphaCeil:          0.52,
+		minSamplesFloor:    2,
+		minSamplesCeil:     6,
+		jitterFloor:        0.10,
+		jitterCeil:         0.28,
+		retuneMinSamples:   8,
+		retuneMaxSamples:   20,
+		bootstrapJitter:    0.32,
+		bootstrapTailScale: 1.35,
+		minJitter:          8 * time.Millisecond,
+		spikeChance:        0.12,
+		maxRecentSamples:   32,
+		enabled:            true,
 	}
 	tn.retuneProfileLocked()
 	return tn
@@ -130,14 +139,14 @@ func (tn *TimingNormalizer) Delay(elapsed time.Duration) time.Duration {
 	tn.mu.RLock()
 	defer tn.mu.RUnlock()
 
-	if !tn.enabled || tn.samples < tn.minSamples {
+	if !tn.enabled || tn.samples == 0 || tn.avgTargetRTT <= 0 {
 		return 0
 	}
 
-	target := tn.sampleTargetRTTLocked() + tn.BaseDelay
+	target := tn.sampleDelayTargetLocked() + tn.BaseDelay
 
 	spread := tn.minJitter
-	if jitter := tn.sampleJitterLocked(); jitter > 0 {
+	if jitter := tn.sampleDelayJitterLocked(); jitter > 0 {
 		relativeSpread := time.Duration(float64(target) * jitter)
 		if relativeSpread > spread {
 			spread = relativeSpread
@@ -146,7 +155,7 @@ func (tn *TimingNormalizer) Delay(elapsed time.Duration) time.Duration {
 	if spread > 0 {
 		target += time.Duration((2*rand.Float64() - 1) * float64(spread))
 	}
-	if tn.spikeChance > 0 && rand.Float64() < tn.spikeChance {
+	if spikeChance := tn.delaySpikeChanceLocked(); spikeChance > 0 && rand.Float64() < spikeChance {
 		target += time.Duration(rand.Float64() * float64(maxDuration(spread, tn.minJitter)))
 	}
 	if target < 0 {
@@ -228,6 +237,54 @@ func (tn *TimingNormalizer) sampleTargetRTTLocked() time.Duration {
 
 	blend := 0.20 + rand.Float64()*0.45
 	return blendDuration(picked, tn.avgTargetRTT, blend)
+}
+
+func (tn *TimingNormalizer) sampleDelayTargetLocked() time.Duration {
+	if tn.samples >= tn.minSamples {
+		return tn.sampleTargetRTTLocked()
+	}
+	return tn.bootstrapTargetRTTLocked()
+}
+
+func (tn *TimingNormalizer) sampleDelayJitterLocked() float64 {
+	if tn.samples >= tn.minSamples {
+		return tn.sampleJitterLocked()
+	}
+	jitter := tn.bootstrapJitter + tn.sampleVolatilityLocked()*0.30 + (rand.Float64()-0.5)*0.08
+	return clampFloat(jitter, 0.16, 0.55)
+}
+
+func (tn *TimingNormalizer) delaySpikeChanceLocked() float64 {
+	if tn.samples >= tn.minSamples {
+		return tn.spikeChance
+	}
+	return clampFloat(tn.spikeChance*tn.bootstrapTailScale, 0.10, 0.35)
+}
+
+func (tn *TimingNormalizer) bootstrapTargetRTTLocked() time.Duration {
+	base := tn.avgTargetRTT
+	if base <= 0 {
+		return 0
+	}
+
+	target := base
+	if len(tn.recentRTTs) > 0 {
+		target = tn.recentRTTs[rand.IntN(len(tn.recentRTTs))]
+	}
+
+	// Keep early auth-path handshakes from standing out as too fast by adding
+	// a modest positive bias until the empirical RTT window is populated.
+	biasScale := 0.10 + (float64(tn.minSamples-tn.samples) * 0.08)
+	if biasScale < 0.08 {
+		biasScale = 0.08
+	}
+	target += time.Duration(float64(maxDuration(base, 5*time.Millisecond)) * biasScale)
+
+	if tn.samples == 1 {
+		target += time.Duration(rand.Float64() * float64(maxDuration(tn.minJitter*2, base/6)))
+	}
+
+	return target
 }
 
 func (tn *TimingNormalizer) sampleAlphaLocked(rtt time.Duration) float64 {
