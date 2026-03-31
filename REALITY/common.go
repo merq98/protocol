@@ -564,6 +564,12 @@ type Config struct {
 
 	Mldsa65Key []byte
 
+	// RequireMldsa65 disables authenticated REALITY handshakes unless an
+	// independent ML-DSA-65 proof key is configured. This limits the blast
+	// radius of a leaked PrivateKey because the temporary certificate path is
+	// no longer anchored solely in the X25519 server key.
+	RequireMldsa65 bool
+
 	// Targets is an optional pool of fallback targets with rotation.
 	// When set, it takes priority over the single Dest/ServerNames fields.
 	// Each target has its own Dest and ServerNames, and the pool rotates
@@ -1020,6 +1026,8 @@ func (c *Config) Clone() *Config {
 		MaxClientVer:                        c.MaxClientVer,
 		MaxTimeDiff:                         c.MaxTimeDiff,
 		ShortIds:                            c.ShortIds,
+		Mldsa65Key:                          c.Mldsa65Key,
+		RequireMldsa65:                      c.RequireMldsa65,
 		LimitFallbackUpload:                 c.LimitFallbackUpload,
 		LimitFallbackDownload:               c.LimitFallbackDownload,
 		Rand:                                c.Rand,

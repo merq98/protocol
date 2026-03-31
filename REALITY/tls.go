@@ -199,7 +199,12 @@ var (
 		"Finished",
 		"New Session Ticket",
 	}
+	realityRequireMldsa65Warn sync.Once
 )
+
+func realityAuthPathEnabled(config *Config) bool {
+	return !config.RequireMldsa65 || len(config.Mldsa65Key) > 0
+}
 
 func Value(vals ...byte) (value int) {
 	for i, val := range vals {
@@ -214,6 +219,14 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 	remoteAddr := conn.RemoteAddr().String()
 	if config.Show {
 		fmt.Printf("REALITY remoteAddr: %v\n", remoteAddr)
+	}
+	if config.RequireMldsa65 && len(config.Mldsa65Key) == 0 {
+		realityRequireMldsa65Warn.Do(func() {
+			fmt.Fprintln(os.Stderr, "REALITY: RequireMldsa65 is enabled but Mldsa65Key is empty; authenticated mode is disabled until an independent proof key is configured")
+		})
+		if config.Show {
+			fmt.Printf("REALITY remoteAddr: %v\tRequireMldsa65 enabled without Mldsa65Key; authenticated mode disabled\n", remoteAddr)
+		}
 	}
 
 	// Resolve the effective dest and serverNames for this connection.
@@ -387,7 +400,7 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 				if (config.MinClientVer == nil || Value(hs.c.ClientVer[:]...) >= Value(config.MinClientVer...)) &&
 					(config.MaxClientVer == nil || Value(hs.c.ClientVer[:]...) <= Value(config.MaxClientVer...)) &&
 					(config.MaxTimeDiff == 0 || time.Since(hs.c.ClientTime).Abs() <= config.MaxTimeDiff) &&
-					(config.ShortIds[hs.c.ClientShortId]) {
+					(config.ShortIds[hs.c.ClientShortId]) && realityAuthPathEnabled(config) {
 					hs.c.conn = conn
 				}
 				break

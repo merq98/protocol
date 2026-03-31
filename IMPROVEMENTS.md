@@ -401,9 +401,9 @@ Fingerprints *FingerprintStore   // #9: OTA fingerprint store
 
 #### 17. Риск при компрометации ключа сервера
 
-- Проблема: при утечке `PrivateKey` auth path становится полностью анализируемым и воспроизводимым.
+- Что изменено: в `Config` добавлен hardened mode `RequireMldsa65`. В этом режиме REALITY не принимает authenticated path, пока не настроен независимый `Mldsa65Key`, а temp cert продолжает подтверждаться уже не только знанием X25519 `PrivateKey`, но и отдельным proof-key, который клиент может проверять через `mldsa65Verify`.
 - Где: `REALITY/tls.go`, `REALITY/handshake_server_tls13.go`.
-- Как детектят: это уже не чистый DPI, а сценарий компрометации; после утечки сервер легко классифицируется и эмулируется.
+- Остаточный риск: legacy-режим без `RequireMldsa65` и без `Mldsa65Key` по-прежнему оставляет auth path воспроизводимым после утечки `PrivateKey`. Даже в hardened mode полная компрометация памяти сервера или утечка второго proof-key снимает это ограничение.
 
 ## Что это означает practically
 
