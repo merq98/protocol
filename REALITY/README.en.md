@@ -51,6 +51,7 @@ TODO List: TODO
                         "0123456789abcdef" // 0 to f, the length is a multiple of 2, the maximum length is 16
                     ],
                     "mldsa65Seed": "", // Optional, execute ./xray mldsa65 to generate, for additional post-quantum signature to the certificate
+                    "requireMldsa65": true, // Recommended for hardened mode: reject REALITY authenticated path unless an independent ML-DSA-65 proof key is configured
                     // These two limitations below are optional, for rate limiting fallback connections, bytesPerSec's default is 0, which means disabled
                     // It's a detectable pattern, not recommended to be enabled, RANDOMIZE these parameters if you're a web-panel/one-click-script developer
                     "limitFallbackUpload": {
@@ -109,7 +110,7 @@ The next main goal of REALITY is "**pre-built mode**", that is, to collect and b
                     "serverName": "", // One of the server serverNames
                     "password": "", // The public key generated from the server's private key, for the client it is the password
                     "shortId": "", // One of the server shortIds
-                    "mldsa65Verify": "", // Optional, the public key generated from the server's mldsa65Seed, for additional post-quantum verification to the certificate
+                    "mldsa65Verify": "", // Required when the server enables requireMldsa65; use the public key generated from the server's mldsa65Seed
                     "spiderX": "" // The initial path and parameters of the crawler, recommended to be different for each client
                 }
             }
@@ -117,6 +118,8 @@ The next main goal of REALITY is "**pre-built mode**", that is, to collect and b
     ]
 }
 ```
+
+When hardened mode is enabled on the server, all REALITY clients must also set `mldsa65Verify`. Roll out `mldsa65Verify` to clients first, then enable `requireMldsa65` on the server.
 
 The REALITY client should receive the "**Temporary Trusted Certificate**" issued by "**Temporary Authentication Key**", but the real certificate of the target website will be received in the following three cases:
 
