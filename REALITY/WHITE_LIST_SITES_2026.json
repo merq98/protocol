@@ -1,0 +1,475 @@
+{
+  "source": "https://www.gazeta.ru/tech/2026/03/23/22683373.shtml?utm_auth=false",
+  "generated_at": "2026-04-01",
+  "description": "Flat structured list of white-list services mentioned in the article and their main official sites.",
+  "entries": [
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "Госуслуги",
+      "urls": ["https://www.gosuslugi.ru"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "сайт правительства РФ",
+      "urls": ["https://government.ru"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "сайты Госдумы и Совета Федерации",
+      "urls": ["https://duma.gov.ru", "https://council.gov.ru"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "сайт Генпрокуратуры",
+      "urls": ["https://epp.genproc.gov.ru"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "сайт системы маркировки Честный знак",
+      "urls": ["https://xn--80ajghhoc2aj1c8b.xn--p1ai"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "ГИС ЖКХ",
+      "urls": ["https://dom.gosuslugi.ru"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "Почта России",
+      "urls": ["https://www.pochta.ru"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "Россия - страна возможностей",
+      "urls": ["https://rsv.ru"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "Движение первых",
+      "urls": ["https://xn--90acagbhgpca7c8c7f.xn--p1ai"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "Объясняем.рф",
+      "urls": ["https://xn--90aivcdt6dxbc.xn--p1ai"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "сайты МВД",
+      "urls": ["https://xn--b1aew.xn--p1ai"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "сайты МЧС",
+      "urls": ["https://www.mchs.gov.ru"]
+    },
+    {
+      "category": "Государственные и социальные сервисы",
+      "name": "сайты Россетей",
+      "urls": ["https://www.rosseti.ru"]
+    },
+    {
+      "category": "Финансовый сектор",
+      "name": "ВТБ",
+      "urls": ["https://www.vtb.ru"]
+    },
+    {
+      "category": "Финансовый сектор",
+      "name": "ПСБ",
+      "urls": ["https://www.psbank.ru"]
+    },
+    {
+      "category": "Финансовый сектор",
+      "name": "Альфа-банк",
+      "urls": ["https://alfabank.ru"]
+    },
+    {
+      "category": "Финансовый сектор",
+      "name": "МТС-банк",
+      "urls": ["https://www.mtsbank.ru"]
+    },
+    {
+      "category": "Финансовый сектор",
+      "name": "платежная система Мир",
+      "urls": ["https://mironline.ru"]
+    },
+    {
+      "category": "Финансовый сектор",
+      "name": "сайт Центробанка",
+      "urls": ["https://www.cbr.ru"]
+    },
+    {
+      "category": "Финансовый сектор",
+      "name": "система быстрых платежей (СБП)",
+      "urls": ["https://sbp.nspk.ru"]
+    },
+    {
+      "category": "Финансовый сектор",
+      "name": "Московская биржа",
+      "urls": ["https://www.moex.com"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "сервисы Яндекса",
+      "urls": [
+        "https://yandex.ru",
+        "https://yandex.ru/maps",
+        "https://music.yandex.ru",
+        "https://taxi.yandex.ru"
+      ],
+      "note": "Article mentions multiple Yandex services: search, maps, music, taxi."
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "ВКонтакте",
+      "urls": ["https://vk.com"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "Одноклассники",
+      "urls": ["https://ok.ru"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "Mail.ru",
+      "urls": ["https://mail.ru"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "мессенджер MAX",
+      "urls": ["https://max.ru"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "Дзен",
+      "urls": ["https://dzen.ru"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "VK Видео",
+      "urls": ["https://vkvideo.ru"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "Rutube",
+      "urls": ["https://rutube.ru"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "Avito",
+      "urls": ["https://www.avito.ru"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "Домклик",
+      "urls": ["https://domclick.ru"]
+    },
+    {
+      "category": "Цифровые экосистемы и коммуникации",
+      "name": "HeadHunter",
+      "urls": ["https://hh.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Ozon",
+      "urls": ["https://www.ozon.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Wildberries",
+      "urls": ["https://www.wildberries.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Мегамаркет",
+      "urls": ["https://megamarket.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Яндекс Маркет",
+      "urls": ["https://market.yandex.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "СДЭК",
+      "urls": ["https://www.cdek.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Купер",
+      "urls": ["https://kuper.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Самокат",
+      "urls": ["https://samokat.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Вкусно - и точка",
+      "urls": ["https://vkusnoitochka.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Бургер Кинг",
+      "urls": ["https://burgerkingrus.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Вкусвилл",
+      "urls": ["https://vkusvill.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Ашан",
+      "urls": ["https://www.auchan.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Спар",
+      "urls": ["https://myspar.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Metro",
+      "urls": ["https://metro-cc.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Петрович",
+      "urls": ["https://petrovich.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Азбука вкуса",
+      "urls": ["https://av.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Пятерочка",
+      "urls": ["https://5ka.ru"]
+    },
+    {
+      "category": "Розница, доставка и общепит",
+      "name": "Перекресток",
+      "urls": ["https://www.perekrestok.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Газета.Ru",
+      "urls": ["https://www.gazeta.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Лента.ру",
+      "urls": ["https://lenta.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Рамблер",
+      "urls": ["https://www.rambler.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "РИА Новости",
+      "urls": ["https://ria.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "ТАСС",
+      "urls": ["https://tass.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Коммерсантъ",
+      "urls": ["https://www.kommersant.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Известия",
+      "urls": ["https://iz.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Российская газета",
+      "urls": ["https://rg.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Аргументы и Факты",
+      "urls": ["https://aif.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Московский комсомолец",
+      "urls": ["https://www.mk.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Комсомольская правда",
+      "urls": ["https://www.kp.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "Первый",
+      "urls": ["https://www.1tv.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "НТВ",
+      "urls": ["https://www.ntv.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "RT",
+      "urls": ["https://rt.com"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "СМИ",
+      "name": "ВГТРК",
+      "urls": ["https://vgtrk.ru", "https://smotrim.ru"],
+      "note": "Corporate site plus the main media platform."
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "Онлайн-кинотеатры",
+      "name": "Окко",
+      "urls": ["https://okko.tv"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "Онлайн-кинотеатры",
+      "name": "Иви",
+      "urls": ["https://www.ivi.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "Онлайн-кинотеатры",
+      "name": "Kion",
+      "urls": ["https://kion.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "Онлайн-кинотеатры",
+      "name": "Кинопоиск",
+      "urls": ["https://www.kinopoisk.ru"]
+    },
+    {
+      "category": "СМИ и развлечения",
+      "subgroup": "Онлайн-кинотеатры",
+      "name": "Wink",
+      "urls": ["https://wink.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "РЖД",
+      "urls": ["https://www.rzd.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "Гранд Сервис Экспресс",
+      "urls": ["https://grandtrain.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "Аэрофлот",
+      "urls": ["https://www.aeroflot.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "Победа",
+      "urls": ["https://www.pobeda.aero"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "Туту.ру",
+      "urls": ["https://www.tutu.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "2ГИС",
+      "urls": ["https://2gis.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "Максим",
+      "urls": ["https://taximaxim.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "Яндекс Go",
+      "urls": ["https://taxi.yandex.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "Ситидрайв",
+      "urls": ["https://citydrive.ru"]
+    },
+    {
+      "category": "Транспорт и путешествия",
+      "name": "Деловые линии",
+      "urls": ["https://www.dellin.ru"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "Билайн",
+      "urls": ["https://beeline.ru"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "МегаФон",
+      "urls": ["https://megafon.ru"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "МТС",
+      "urls": ["https://mts.ru"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "Ростелеком",
+      "urls": ["https://rt.ru"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "Т2 (Tele2)",
+      "urls": ["https://t2.ru"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "Мотив",
+      "urls": ["https://motivtelecom.ru"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "Сбермобайл",
+      "urls": ["https://www.sbermobile.ru"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "Т-Мобайл (Тинькофф Мобайл)",
+      "urls": ["https://www.tbank.ru/mobile/"]
+    },
+    {
+      "category": "Личные кабинеты операторов связи",
+      "name": "Эр-телеком",
+      "urls": ["https://ertelecom.ru", "https://dom.ru"],
+      "note": "Corporate portal and consumer brand portal."
+    }
+  ]
+}
