@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	goreality "github.com/xtls/reality"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/platform/filesystem"
@@ -782,6 +783,8 @@ type REALITYConfig struct {
 	Show           bool            `json:"show"`
 	Target         json.RawMessage `json:"target"`
 	Dest           json.RawMessage `json:"dest"`
+	TargetsFile    string          `json:"targetsFile"`
+	TargetsRotateSeconds uint64    `json:"targetsRotateSeconds"`
 	Type           string          `json:"type"`
 	Xver           uint64          `json:"xver"`
 	ServerNames    []string        `json:"serverNames"`
@@ -813,13 +816,15 @@ func (c *REALITYConfig) Build() (proto.Message, error) {
 	if c.Target != nil {
 		c.Dest = c.Target
 	}
-	if c.Dest != nil {
+	if c.Dest != nil || c.TargetsFile != "" {
 		var i uint16
 		var s string
-		if err = json.Unmarshal(c.Dest, &i); err == nil {
-			s = strconv.Itoa(int(i))
-		} else {
-			_ = json.Unmarshal(c.Dest, &s)
+		if c.Dest != nil {
+			if err = json.Unmarshal(c.Dest, &i); err == nil {
+				s = strconv.Itoa(int(i))
+			} else {
+				_ = json.Unmarshal(c.Dest, &s)
+			}
 		}
 		if c.Type == "" && s != "" {
 			switch s[0] {
@@ -839,14 +844,24 @@ func (c *REALITYConfig) Build() (proto.Message, error) {
 				}
 			}
 		}
+		if c.Type == "" && c.TargetsFile != "" {
+			c.Type = "tcp"
+		}
 		if c.Type == "" {
-			return nil, errors.New(`please fill in a valid value for "target"`)
+			return nil, errors.New(`please fill in a valid value for "target" or "targetsFile"`)
 		}
 		if c.Xver > 2 {
 			return nil, errors.New(`invalid PROXY protocol version, "xver" only accepts 0, 1, 2`)
 		}
-		if len(c.ServerNames) == 0 {
+		if len(c.ServerNames) == 0 && c.TargetsFile == "" {
 			return nil, errors.New(`empty "serverNames"`)
+		}
+		if c.TargetsFile != "" {
+			if _, err = goreality.LoadTargetPoolFromJSON(c.TargetsFile, time.Duration(c.TargetsRotateSeconds)*time.Second); err != nil {
+				return nil, errors.New(`invalid "targetsFile": `, c.TargetsFile).Base(err)
+			}
+			config.TargetsFile = c.TargetsFile
+			config.TargetsRotateSeconds = c.TargetsRotateSeconds
 		}
 		if c.PrivateKey == "" {
 			return nil, errors.New(`empty "privateKey"`)

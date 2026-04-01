@@ -22,6 +22,8 @@ message Config {
   LimitFallback limit_fallback_upload = 12;
   LimitFallback limit_fallback_download = 13;
   bool require_mldsa65 = 14;
+  string targets_file = 15;
+  uint64 targets_rotate_seconds = 16;
 
   string Fingerprint = 21;
   string server_name = 22;

@@ -54,6 +54,153 @@ UUID=...
 3. `SHORT_ID` делай не пустым.
 4. Если есть свой домен, он не обязателен для REALITY, но может упростить операционку вокруг сервера.
 
+## Что нужно от тебя, если ты хочешь, чтобы я довёл деплой до рабочего состояния
+
+Есть два рабочих режима.
+
+### Вариант 1. Ты даёшь мне данные, я собираю для тебя точные команды и готовые конфиги
+
+Для этого мне нужны:
+
+1. IP сервера или домен VPS
+2. SSH-порт
+3. логин пользователя на VPS
+4. дистрибутив Linux и версия, например Ubuntu 24.04
+5. путь, где на сервере уже лежит repo `protocol`, если ты его уже клонировал
+6. хочешь ли ты включать `requireMldsa65` сразу
+7. какой target ты хочешь использовать по умолчанию, если нужен базовый fallback помимо пула из JSON
+8. какой клиент ты будешь использовать для подключения: Windows, Android, iPhone, macOS, Linux
+9. хочешь ли ты использовать пул доменов из `WHITE_LIST_SITES_2026.json` как target pool
+
+### Вариант 2. Ты сам клонируешь repo на VPS, а я даю тебе точную командную последовательность под запуск
+
+Тогда от тебя нужны только:
+
+1. путь до repo на сервере, например `/opt/src/protocol`
+2. путь до итогового конфига Xray, например `/usr/local/etc/xray/config.json`
+3. значение `UUID`
+4. значение `SHORT_ID`
+5. выбранные `serverNames`
+6. нужен ли `mldsa65Seed`/`mldsa65Verify`
+
+Если SSH-доступ в этот чат не прокинут, я всё равно могу подготовить полностью готовые команды для вставки на сервер.
+
+## Быстрый сценарий, если VPS уже есть и repo уже склонирован
+
+Ниже сценарий для случая, когда repo уже лежит на сервере в `/opt/src/protocol`.
+
+Сначала задай переменные:
+
+```bash
+export PROTOCOL_ROOT=/opt/src/protocol
+export XRAY_ROOT=/opt/src/protocol/Xray-core
+export XRAY_CONFIG_DIR=/usr/local/etc/xray
+export XRAY_CONFIG_FILE=/usr/local/etc/xray/config.json
+export XRAY_BIN=/usr/local/bin/xray
+
+export XRAY_LISTEN_PORT=443
+export UUID=PUT_YOUR_UUID_HERE
+export SHORT_ID=0123456789abcdef
+export SERVER_NAME_1=PUT_YOUR_SERVER_NAME_HERE
+export SERVER_NAME_2=PUT_YOUR_SECOND_SERVER_NAME_HERE
+export TARGET_DEST=example.com:443
+```
+
+Поставь пакеты и собери бинарник:
+
+```bash
+apt update
+apt install -y git curl unzip build-essential jq ufw
+
+cd "$XRAY_ROOT"
+go mod tidy
+go build -trimpath -ldflags='-s -w' -o "$XRAY_BIN" ./main
+"$XRAY_BIN" version
+```
+
+Сгенерируй ключи, если их ещё нет:
+
+```bash
+"$XRAY_BIN" x25519
+"$XRAY_BIN" uuid
+"$XRAY_BIN" mldsa65
+```
+
+После этого подставь значения в конфиг ниже и сохрани его в `$XRAY_CONFIG_FILE`.
+
+Пример server config с поддержкой target pool из JSON:
+
+```json
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "YOUR_UUID",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "target": "YOUR_TARGET_DEST",
+          "targetsFile": "/usr/local/etc/xray/WHITE_LIST_SITES_2026.json",
+          "targetsRotateSeconds": 300,
+          "xver": 0,
+          "serverNames": [
+            "YOUR_SERVER_NAME_1",
+            "YOUR_SERVER_NAME_2"
+          ],
+          "privateKey": "YOUR_SERVER_PRIVATE_KEY",
+          "shortIds": [
+            "YOUR_SHORT_ID"
+          ],
+          "mldsa65Seed": "YOUR_MLDSA65_SEED",
+          "requireMldsa65": true
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    }
+  ]
+}
+```
+
+Скопируй JSON со списком доменов в каталог Xray-конфига:
+
+```bash
+mkdir -p "$XRAY_CONFIG_DIR"
+cp "$PROTOCOL_ROOT/REALITY/WHITE_LIST_SITES_2026.json" "$XRAY_CONFIG_DIR/WHITE_LIST_SITES_2026.json"
+```
+
+Проверь конфиг и запусти сервис:
+
+```bash
+"$XRAY_BIN" run -test -config "$XRAY_CONFIG_FILE"
+systemctl daemon-reload
+systemctl enable xray
+systemctl restart xray
+systemctl status xray --no-pager
+journalctl -u xray -n 100 --no-pager
+```
+
+Если systemd unit ещё не создан, используй шаблон из шага 8 ниже.
+
 ## Шаг 1. Подготовить VPS
 
 Ниже пример для Ubuntu 22.04/24.04.
@@ -141,6 +288,8 @@ replace github.com/xtls/reality => /opt/src/protocol/REALITY
 3. Пробрось поле в runtime config `reality.Config`.
 
 Если hardened mode пока не нужен, этот шаг можно временно пропустить и собрать сервер без `requireMldsa65`.
+
+Если хочешь маскировать fallback не под один target, а под пул официальных доменов из JSON, добавь в `realitySettings` поле `targetsFile` и при необходимости `targetsRotateSeconds`. Тогда REALITY загрузит host-ы из JSON, преобразует их в `host:443` и будет выбирать target из пула по SNI/ротации.
 
 ## Шаг 5. Собрать свой xray
 
@@ -230,6 +379,8 @@ mkdir -p /usr/local/etc/xray
         "realitySettings": {
           "show": false,
           "target": "YOUR_TARGET_DEST",
+          "targetsFile": "/usr/local/etc/xray/WHITE_LIST_SITES_2026.json",
+          "targetsRotateSeconds": 300,
           "xver": 0,
           "serverNames": [
             "YOUR_SERVER_NAME_1",
@@ -515,3 +666,5 @@ ss -ltnp | grep :443
 3. выбранный target
 4. нужен ли hardened mode сразу
 5. какие именно клиенты на Windows/Android/iPhone ты собираешься использовать
+
+Если repo уже лежит на VPS, дополнительно пришли путь до него, и я дам тебе команду запуска под твою конкретную машину без шаблонов.

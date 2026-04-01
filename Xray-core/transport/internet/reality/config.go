@@ -38,6 +38,14 @@ func (c *Config) GetREALITYConfig() *reality.Config {
 		_, key := mldsa65.NewKeyFromSeed((*[32]byte)(c.Mldsa65Seed))
 		config.Mldsa65Key = key.Bytes()
 	}
+	if c.TargetsFile != "" {
+		targets, err := reality.LoadTargetPoolFromJSON(c.TargetsFile, time.Duration(c.TargetsRotateSeconds)*time.Second)
+		if err != nil {
+			errors.LogErrorInner(context.Background(), err, "failed to load REALITY targets from ", c.TargetsFile)
+		} else {
+			config.Targets = targets
+		}
+	}
 	if c.LimitFallbackUpload != nil {
 		config.LimitFallbackUpload.AfterBytes = c.LimitFallbackUpload.AfterBytes
 		config.LimitFallbackUpload.BytesPerSec = c.LimitFallbackUpload.BytesPerSec

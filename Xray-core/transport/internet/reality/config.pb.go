@@ -37,6 +37,8 @@ type Config struct {
 	LimitFallbackUpload   *LimitFallback         `protobuf:"bytes,12,opt,name=limit_fallback_upload,json=limitFallbackUpload,proto3" json:"limit_fallback_upload,omitempty"`
 	LimitFallbackDownload *LimitFallback         `protobuf:"bytes,13,opt,name=limit_fallback_download,json=limitFallbackDownload,proto3" json:"limit_fallback_download,omitempty"`
 	RequireMldsa65        bool                   `protobuf:"varint,14,opt,name=require_mldsa65,json=requireMldsa65,proto3" json:"require_mldsa65,omitempty"`
+	TargetsFile           string                 `protobuf:"bytes,15,opt,name=targets_file,json=targetsFile,proto3" json:"targets_file,omitempty"`
+	TargetsRotateSeconds  uint64                 `protobuf:"varint,16,opt,name=targets_rotate_seconds,json=targetsRotateSeconds,proto3" json:"targets_rotate_seconds,omitempty"`
 	Fingerprint           string                 `protobuf:"bytes,21,opt,name=Fingerprint,proto3" json:"Fingerprint,omitempty"`
 	ServerName            string                 `protobuf:"bytes,22,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
 	PublicKey             []byte                 `protobuf:"bytes,23,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
@@ -175,6 +177,20 @@ func (x *Config) GetRequireMldsa65() bool {
 		return x.RequireMldsa65
 	}
 	return false
+}
+
+func (x *Config) GetTargetsFile() string {
+	if x != nil {
+		return x.TargetsFile
+	}
+	return ""
+}
+
+func (x *Config) GetTargetsRotateSeconds() uint64 {
+	if x != nil {
+		return x.TargetsRotateSeconds
+	}
+	return 0
 }
 
 func (x *Config) GetFingerprint() string {
