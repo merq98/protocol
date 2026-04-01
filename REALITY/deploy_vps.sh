@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+GO_VERSION="${GO_VERSION:-1.26.1}"
+SERVER_IP="${SERVER_IP:-45.144.30.147}"
+SSH_PORT="${SSH_PORT:-22}"
+PROTOCOL_ROOT="${PROTOCOL_ROOT:-/home/merq/protocol}"
+XRAY_CONFIG_DIR="${XRAY_CONFIG_DIR:-/usr/local/etc/xray}"
+XRAY_CONFIG_FILE="${XRAY_CONFIG_FILE:-$XRAY_CONFIG_DIR/config.json}"
+XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
+XRAY_SERVICE_FILE="${XRAY_SERVICE_FILE:-/etc/systemd/system/xray.service}"
+TARGETS_JSON_SOURCE="${TARGETS_JSON_SOURCE:-$PROTOCOL_ROOT/REALITY/WHITE_LIST_SITES_2026.json}"
+TARGETS_JSON_DEST="${TARGETS_JSON_DEST:-$XRAY_CONFIG_DIR/WHITE_LIST_SITES_2026.json}"
+TARGETS_ROTATE_SECONDS="${TARGETS_ROTATE_SECONDS:-300}"
+SERVER_NAME_1="${SERVER_NAME_1:-rg.ru}"
+SERVER_NAME_2="${SERVER_NAME_2:-aif.ru}"
+TARGET_DEST="${TARGET_DEST:-rg.ru:443}"
+SHORT_ID="${SHORT_ID:-0123456789abcdef}"
+OUTPUT_DIR="${OUTPUT_DIR:-$HOME/xray-reality}"
+UUID="${UUID:-}"
+SERVER_PRIVATE_KEY="${SERVER_PRIVATE_KEY:-}"
+SERVER_PUBLIC_KEY="${SERVER_PUBLIC_KEY:-}"
+
+log() {
+  printf '\n==> %s\n' "$1"
+}
+
+require_file() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    printf 'Missing required file: %s\n' "$path" >&2
+    exit 1
+  fi
+}
+
+parse_value() {
+  local content="$1"
+  local regex="$2"
+  printf '%s\n' "$content" | sed -n "$regex" | head -n 1 | tr -d '\r'
+}
+
+ensure_go_on_path() {
+  if [[ -d /usr/local/go/bin ]]; then
+    export PATH=/usr/local/go/bin:$PATH
+    hash -r
+  fi
+}
+
+current_go_version() {
+  if command -v go >/dev/null 2>&1; then
+    go version | awk '{print $3}'
+    return 0
+  fi
+  return 1
+}
+
+install_go() {
+  log "Installing Go ${GO_VERSION}"
+  cd /tmp
+  rm -f "go${GO_VERSION}.linux-amd64.tar.gz"
+  curl -LO "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
+  sudo rm -rf /usr/local/go
+  sudo tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz"
+  if ! grep -Fq 'export PATH=/usr/local/go/bin:$PATH' "$HOME/.profile" 2>/dev/null; then
+    echo 'export PATH=/usr/local/go/bin:$PATH' >> "$HOME/.profile"
+  fi
+  ensure_go_on_path
+}
+
+log "Installing system packages"
+sudo apt update
+sudo apt install -y git curl unzip build-essential jq ufw
+
+ensure_go_on_path
+CURRENT_GO="$(current_go_version || true)"
+if [[ "$CURRENT_GO" == "go${GO_VERSION}" ]]; then
+  log "Go ${GO_VERSION} is already installed, skipping reinstall"
+else
+  if [[ -n "$CURRENT_GO" ]]; then
+    log "Go version mismatch: found ${CURRENT_GO}, need go${GO_VERSION}"
+  else
+    log "Go is not installed"
+  fi
+  install_go
+fi
+go version
+
+require_file "$PROTOCOL_ROOT/Xray-core/go.mod"
+require_file "$TARGETS_JSON_SOURCE"
+
+log "Building Xray"
+cd "$PROTOCOL_ROOT/Xray-core"
+go mod tidy
+go build -trimpath -ldflags='-s -w' -o /tmp/xray ./main
+sudo install -m 0755 /tmp/xray "$XRAY_BIN"
+"$XRAY_BIN" version
+
+if [[ -n "$UUID" && -n "$SERVER_PRIVATE_KEY" && -n "$SERVER_PUBLIC_KEY" ]]; then
+  log "Using UUID and REALITY keys from environment"
+else
+  log "Generating REALITY keys and UUID"
+  KEY_OUTPUT="$($XRAY_BIN x25519)"
+  UUID="${UUID:-$($XRAY_BIN uuid | tail -n 1 | tr -d '\r')}"
+
+  SERVER_PRIVATE_KEY="${SERVER_PRIVATE_KEY:-$(parse_value "$KEY_OUTPUT" 's/^PrivateKey:[[:space:]]*//p; s/^Private key:[[:space:]]*//p')}"
+  SERVER_PUBLIC_KEY="${SERVER_PUBLIC_KEY:-$(parse_value "$KEY_OUTPUT" 's/^Password (PublicKey):[[:space:]]*//p; s/^PublicKey:[[:space:]]*//p; s/^Public key:[[:space:]]*//p')}"
+fi
+
+if [[ -z "$SERVER_PRIVATE_KEY" || -z "$SERVER_PUBLIC_KEY" || -z "$UUID" ]]; then
+  printf 'Failed to parse generated keys or UUID.\n' >&2
+  if [[ -n "${KEY_OUTPUT:-}" ]]; then
+    printf '%s\n' "$KEY_OUTPUT" >&2
+  fi
+  exit 1
+fi
+
+log "Writing server files"
+sudo mkdir -p "$XRAY_CONFIG_DIR"
+sudo cp "$TARGETS_JSON_SOURCE" "$TARGETS_JSON_DEST"
+sudo chown root:root "$TARGETS_JSON_DEST"
+sudo chmod 0644 "$TARGETS_JSON_DEST"
+
+sudo tee "$XRAY_CONFIG_FILE" > /dev/null <<EOF
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "listen": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "$UUID",
+            "flow": "xtls-rprx-vision"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "raw",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "target": "$TARGET_DEST",
+          "targetsFile": "$TARGETS_JSON_DEST",
+          "targetsRotateSeconds": $TARGETS_ROTATE_SECONDS,
+          "xver": 0,
+          "serverNames": [
+            "$SERVER_NAME_1",
+            "$SERVER_NAME_2"
+          ],
+          "privateKey": "$SERVER_PRIVATE_KEY",
+          "shortIds": [
+            "$SHORT_ID"
+          ]
+        }
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls",
+          "quic"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    }
+  ]
+}
+EOF
+
+"$XRAY_BIN" run -test -config "$XRAY_CONFIG_FILE"
+
+log "Configuring firewall"
+sudo ufw allow "${SSH_PORT}/tcp"
+sudo ufw allow 443/tcp
+sudo ufw --force enable
+
+log "Installing systemd unit"
+sudo tee "$XRAY_SERVICE_FILE" > /dev/null <<'EOF'
+[Unit]
+Description=Xray Service
+After=network.target nss-lookup.target
+
+[Service]
+User=nobody
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+NoNewPrivileges=true
+ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+log "Starting Xray"
+sudo systemctl daemon-reload
+sudo systemctl enable xray
+sudo systemctl restart xray
+sudo systemctl status xray --no-pager
+
+log "Saving generated values"
+umask 077
+mkdir -p "$OUTPUT_DIR"
+
+SERVER_VALUES_FILE="$OUTPUT_DIR/server-values.env"
+CLIENT_VALUES_FILE="$OUTPUT_DIR/client-reality.txt"
+
+cat > "$SERVER_VALUES_FILE" <<EOF
+UUID='$UUID'
+SERVER_PRIVATE_KEY='$SERVER_PRIVATE_KEY'
+SERVER_PUBLIC_KEY='$SERVER_PUBLIC_KEY'
+SHORT_ID='$SHORT_ID'
+SERVER_NAME_1='$SERVER_NAME_1'
+SERVER_NAME_2='$SERVER_NAME_2'
+TARGET_DEST='$TARGET_DEST'
+SERVER_IP='$SERVER_IP'
+XRAY_CONFIG_FILE='$XRAY_CONFIG_FILE'
+EOF
+
+cat > "$CLIENT_VALUES_FILE" <<EOF
+Address: $SERVER_IP
+Port: 443
+UUID: $UUID
+Flow: xtls-rprx-vision
+Public Key: $SERVER_PUBLIC_KEY
+Short ID: $SHORT_ID
+Server Name: $SERVER_NAME_1
+Fingerprint: chrome
+EOF
+
+log "Done"
+printf 'Server values saved to: %s\n' "$SERVER_VALUES_FILE"
+printf 'Client values saved to: %s\n' "$CLIENT_VALUES_FILE"
+printf '\nClient parameters:\n'
+cat "$CLIENT_VALUES_FILE"
