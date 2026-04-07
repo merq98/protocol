@@ -139,25 +139,32 @@ func (hs *serverHandshakeStateTLS13) handshake() error {
 		}
 	*/
 	{
-		if profile, profileErr := ensureTargetCertificateProfile(c.config.Type, c.TargetDest, hs.clientHello.serverName, c.config.Show); profileErr == nil && profile != nil {
-			camouflageCert, certErr := buildCamouflageCertificate(profile, c.config.rand())
-			if certErr == nil {
-				sigAlg, sigErr := selectSignatureScheme(c.vers, camouflageCert, hs.clientHello.supportedSignatureAlgorithms)
-				if sigErr == nil {
-					hs.cert = camouflageCert
-					hs.sigAlg = sigAlg
+		// Camouflage certificates are only for unauthenticated connections.
+		// Authenticated REALITY clients need the HMAC-signed ed25519 certificate
+		// so that VerifyPeerCertificate can confirm the server's identity.
+		// Since handshake() is only called for authenticated clients (c.conn == conn),
+		// this block is effectively skipped here, but the guard remains for safety.
+		if len(c.AuthKey) == 0 {
+			if profile, profileErr := ensureTargetCertificateProfile(c.config.Type, c.TargetDest, hs.clientHello.serverName, c.config.Show); profileErr == nil && profile != nil {
+				camouflageCert, certErr := buildCamouflageCertificate(profile, c.config.rand())
+				if certErr == nil {
+					sigAlg, sigErr := selectSignatureScheme(c.vers, camouflageCert, hs.clientHello.supportedSignatureAlgorithms)
+					if sigErr == nil {
+						hs.cert = camouflageCert
+						hs.sigAlg = sigAlg
+					}
+					certErr = sigErr
 				}
-				certErr = sigErr
-			}
-			if certErr == nil {
-				if c.config.Show {
-					fmt.Printf("REALITY remoteAddr: %v\tusing camouflage certificate profile: %v/%v (%s certs)\n", c.RemoteAddr(), c.TargetDest, hs.clientHello.serverName, certProfileStatus(profile))
+				if certErr == nil {
+					if c.config.Show {
+						fmt.Printf("REALITY remoteAddr: %v\tusing camouflage certificate profile: %v/%v (%s certs)\n", c.RemoteAddr(), c.TargetDest, hs.clientHello.serverName, certProfileStatus(profile))
+					}
+				} else if c.config.Show {
+					fmt.Printf("REALITY remoteAddr: %v\tcamouflage certificate fallback: %v\n", c.RemoteAddr(), certErr)
 				}
-			} else if c.config.Show {
-				fmt.Printf("REALITY remoteAddr: %v\tcamouflage certificate fallback: %v\n", c.RemoteAddr(), certErr)
+			} else if profileErr != nil && c.config.Show {
+				fmt.Printf("REALITY remoteAddr: %v\tcertificate profile capture fallback: %v\n", c.RemoteAddr(), profileErr)
 			}
-		} else if profileErr != nil && c.config.Show {
-			fmt.Printf("REALITY remoteAddr: %v\tcertificate profile capture fallback: %v\n", c.RemoteAddr(), profileErr)
 		}
 
 		if hs.cert == nil {

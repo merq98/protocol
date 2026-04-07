@@ -386,9 +386,16 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 				}
 				ciphertext := append([]byte(nil), authPayload...)
 				plainText := make([]byte, realityAuthPayloadSize)
+				// Zero the auth payload region inside original before AEAD Open.
+				// The client used Raw with zeros at this position as AD, so the
+				// server must match by zeroing the same region in original.
+				// (authPayload is a sub-slice of original via sessionId/sessionTicket)
+				copy(authPayload, plainText)
 				if _, err = aead.Open(plainText[:0], hs.clientHello.random[20:], ciphertext, hs.clientHello.original); err != nil {
+					copy(authPayload, ciphertext) // restore on failure
 					break
 				}
+				copy(authPayload, ciphertext) // restore after successful decryption
 				copy(hs.c.ClientVer[:], plainText)
 				hs.c.ClientTime = time.Unix(int64(binary.BigEndian.Uint32(plainText[4:])), 0)
 				copy(hs.c.ClientShortId[:], plainText[8:])
