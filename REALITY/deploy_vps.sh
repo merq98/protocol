@@ -116,26 +116,39 @@ if [[ "$(whoami)" == "root" ]]; then
   if [[ ! -d "$PROTOCOL_ROOT" ]]; then
     log "Cloning protocol repo"
     sudo -u "$DEPLOY_USER" git clone https://github.com/merq98/protocol.git "$PROTOCOL_ROOT"
+  else
+    log "Updating protocol repo"
+    sudo -u "$DEPLOY_USER" git -C "$PROTOCOL_ROOT" pull --ff-only || true
   fi
 
-  # Re-run as the deploy user
+  # Re-run as the deploy user via env file (avoids bash -c quoting issues)
   log "Switching to user '$DEPLOY_USER' to continue setup"
-  export GO_VERSION SERVER_IP SSH_PORT PROTOCOL_ROOT XRAY_CONFIG_DIR XRAY_CONFIG_FILE
-  export XRAY_BIN XRAY_SERVICE_FILE TARGETS_JSON_SOURCE TARGETS_JSON_DEST
-  export TARGETS_ROTATE_SECONDS SERVER_NAME_1 SERVER_NAME_2 TARGET_DEST SHORT_ID
-  export OUTPUT_DIR UUID SERVER_PRIVATE_KEY SERVER_PUBLIC_KEY DEPLOY_USER
-  sudo -u "$DEPLOY_USER" -i bash -c "
-    export GO_VERSION='$GO_VERSION' SERVER_IP='$SERVER_IP' SSH_PORT='$SSH_PORT'
-    export PROTOCOL_ROOT='$PROTOCOL_ROOT' XRAY_CONFIG_DIR='$XRAY_CONFIG_DIR'
-    export XRAY_CONFIG_FILE='$XRAY_CONFIG_FILE' XRAY_BIN='$XRAY_BIN'
-    export XRAY_SERVICE_FILE='$XRAY_SERVICE_FILE' TARGETS_JSON_SOURCE='$TARGETS_JSON_SOURCE'
-    export TARGETS_JSON_DEST='$TARGETS_JSON_DEST' TARGETS_ROTATE_SECONDS='$TARGETS_ROTATE_SECONDS'
-    export SERVER_NAME_1='$SERVER_NAME_1' SERVER_NAME_2='$SERVER_NAME_2'
-    export TARGET_DEST='$TARGET_DEST' SHORT_ID='$SHORT_ID'
-    export UUID='$UUID' SERVER_PRIVATE_KEY='$SERVER_PRIVATE_KEY'
-    export SERVER_PUBLIC_KEY='$SERVER_PUBLIC_KEY' DEPLOY_USER='$DEPLOY_USER'
-    bash '$PROTOCOL_ROOT/REALITY/deploy_vps.sh'
-  "
+  ENV_FILE=$(mktemp /tmp/deploy-env.XXXXXX)
+  cat > "$ENV_FILE" <<ENVEOF
+export GO_VERSION='$GO_VERSION'
+export SERVER_IP='$SERVER_IP'
+export SSH_PORT='$SSH_PORT'
+export PROTOCOL_ROOT='$PROTOCOL_ROOT'
+export XRAY_CONFIG_DIR='$XRAY_CONFIG_DIR'
+export XRAY_CONFIG_FILE='$XRAY_CONFIG_FILE'
+export XRAY_BIN='$XRAY_BIN'
+export XRAY_SERVICE_FILE='$XRAY_SERVICE_FILE'
+export TARGETS_JSON_SOURCE='$TARGETS_JSON_SOURCE'
+export TARGETS_JSON_DEST='$TARGETS_JSON_DEST'
+export TARGETS_ROTATE_SECONDS='$TARGETS_ROTATE_SECONDS'
+export SERVER_NAME_1='$SERVER_NAME_1'
+export SERVER_NAME_2='$SERVER_NAME_2'
+export TARGET_DEST='$TARGET_DEST'
+export SHORT_ID='$SHORT_ID'
+export UUID='$UUID'
+export SERVER_PRIVATE_KEY='$SERVER_PRIVATE_KEY'
+export SERVER_PUBLIC_KEY='$SERVER_PUBLIC_KEY'
+export DEPLOY_USER='$DEPLOY_USER'
+export OUTPUT_DIR='/home/$DEPLOY_USER/xray-reality'
+ENVEOF
+  chmod 644 "$ENV_FILE"
+  sudo -u "$DEPLOY_USER" -i bash -c "source '$ENV_FILE' && bash '$PROTOCOL_ROOT/REALITY/deploy_vps.sh'"
+  rm -f "$ENV_FILE"
   exit 0
 fi
 
