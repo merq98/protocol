@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
+# deploy_vps.sh — First-time VPS setup for Xray REALITY.
+#
+# Run as root on a fresh Ubuntu server:
+#   DEPLOY_USER_PASSWORD='YourPass!' bash deploy_vps.sh
+#
+# Or as an existing sudo user (skips user creation):
+#   bash deploy_vps.sh
 
 set -euo pipefail
 
+DEPLOY_USER="${DEPLOY_USER:-merq}"
+DEPLOY_USER_PASSWORD="${DEPLOY_USER_PASSWORD:-}"
 GO_VERSION="${GO_VERSION:-1.26.1}"
 SERVER_IP="${SERVER_IP:-45.144.30.147}"
 SSH_PORT="${SSH_PORT:-22}"
-PROTOCOL_ROOT="${PROTOCOL_ROOT:-/home/merq/protocol}"
+PROTOCOL_ROOT="${PROTOCOL_ROOT:-/home/${DEPLOY_USER}/protocol}"
 XRAY_CONFIG_DIR="${XRAY_CONFIG_DIR:-/usr/local/etc/xray}"
 XRAY_CONFIG_FILE="${XRAY_CONFIG_FILE:-$XRAY_CONFIG_DIR/config.json}"
 XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
@@ -71,6 +80,49 @@ install_go() {
 log "Installing system packages"
 sudo apt update
 sudo apt install -y git curl unzip build-essential jq ufw
+
+# --- Create deploy user if running as root ---
+if [[ "$(whoami)" == "root" ]]; then
+  if id "$DEPLOY_USER" &>/dev/null; then
+    log "User '$DEPLOY_USER' already exists"
+  else
+    if [[ -z "$DEPLOY_USER_PASSWORD" ]]; then
+      printf 'Error: DEPLOY_USER_PASSWORD is required when running as root.\n' >&2
+      printf 'Usage: DEPLOY_USER_PASSWORD="YourPass!" bash %s\n' "$0" >&2
+      exit 1
+    fi
+    log "Creating user '$DEPLOY_USER' with sudo access"
+    useradd -m -s /bin/bash "$DEPLOY_USER"
+    echo "${DEPLOY_USER}:${DEPLOY_USER_PASSWORD}" | chpasswd
+    usermod -aG sudo "$DEPLOY_USER"
+  fi
+
+  # Set up SSH key auth if root has authorized_keys
+  DEPLOY_USER_HOME="/home/${DEPLOY_USER}"
+  if [[ -f /root/.ssh/authorized_keys ]] && [[ ! -f "${DEPLOY_USER_HOME}/.ssh/authorized_keys" ]]; then
+    log "Copying SSH keys to '$DEPLOY_USER'"
+    mkdir -p "${DEPLOY_USER_HOME}/.ssh"
+    cp /root/.ssh/authorized_keys "${DEPLOY_USER_HOME}/.ssh/authorized_keys"
+    chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${DEPLOY_USER_HOME}/.ssh"
+    chmod 700 "${DEPLOY_USER_HOME}/.ssh"
+    chmod 600 "${DEPLOY_USER_HOME}/.ssh/authorized_keys"
+  fi
+
+  # Clone repo if not present
+  if [[ ! -d "$PROTOCOL_ROOT" ]]; then
+    log "Cloning protocol repo"
+    sudo -u "$DEPLOY_USER" git clone https://github.com/merq98/protocol.git "$PROTOCOL_ROOT"
+  fi
+
+  # Re-run as the deploy user
+  log "Switching to user '$DEPLOY_USER' to continue setup"
+  export GO_VERSION SERVER_IP SSH_PORT PROTOCOL_ROOT XRAY_CONFIG_DIR XRAY_CONFIG_FILE
+  export XRAY_BIN XRAY_SERVICE_FILE TARGETS_JSON_SOURCE TARGETS_JSON_DEST
+  export TARGETS_ROTATE_SECONDS SERVER_NAME_1 SERVER_NAME_2 TARGET_DEST SHORT_ID
+  export OUTPUT_DIR UUID SERVER_PRIVATE_KEY SERVER_PUBLIC_KEY DEPLOY_USER
+  sudo -u "$DEPLOY_USER" -E bash "$PROTOCOL_ROOT/REALITY/deploy_vps.sh"
+  exit 0
+fi
 
 ensure_go_on_path
 CURRENT_GO="$(current_go_version || true)"
