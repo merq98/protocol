@@ -147,8 +147,20 @@ export DEPLOY_USER='$DEPLOY_USER'
 export OUTPUT_DIR='/home/$DEPLOY_USER/xray-reality'
 ENVEOF
   chmod 644 "$ENV_FILE"
-  sudo -u "$DEPLOY_USER" -i bash -c "source '$ENV_FILE' && bash '$PROTOCOL_ROOT/REALITY/deploy_vps.sh'"
-  rm -f "$ENV_FILE"
+
+  # Write a wrapper script that sources env and runs deploy
+  WRAPPER=$(mktemp /tmp/deploy-run.XXXXXX.sh)
+  cat > "$WRAPPER" <<WRAPEOF
+#!/usr/bin/env bash
+set -euo pipefail
+source '$ENV_FILE'
+exec bash "\$PROTOCOL_ROOT/REALITY/deploy_vps.sh"
+WRAPEOF
+  chmod 755 "$WRAPPER"
+  chown "$DEPLOY_USER:$DEPLOY_USER" "$WRAPPER"
+
+  sudo -u "$DEPLOY_USER" bash "$WRAPPER"
+  rm -f "$ENV_FILE" "$WRAPPER"
   exit 0
 fi
 
