@@ -97,6 +97,10 @@ if [[ "$(whoami)" == "root" ]]; then
     usermod -aG sudo "$DEPLOY_USER"
   fi
 
+  # Allow passwordless sudo for deploy user (needed for non-interactive script)
+  echo "${DEPLOY_USER} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${DEPLOY_USER}"
+  chmod 0440 "/etc/sudoers.d/${DEPLOY_USER}"
+
   # Set up SSH key auth if root has authorized_keys
   DEPLOY_USER_HOME="/home/${DEPLOY_USER}"
   if [[ -f /root/.ssh/authorized_keys ]] && [[ ! -f "${DEPLOY_USER_HOME}/.ssh/authorized_keys" ]]; then
