@@ -27,19 +27,19 @@ require_root() {
 
 get_server_info() {
   SERVER_IP=$(hostname -I | awk '{print $1}')
-  PUBLIC_KEY=$("$XRAY_BIN" x25519 -i "$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$XRAY_CONFIG")" | grep 'Password (PublicKey):' | awk '{print $NF}')
-  SHORT_ID=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$XRAY_CONFIG")
-  SERVER_NAME=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$XRAY_CONFIG")
+  PUBLIC_KEY=$("$XRAY_BIN" x25519 -i "$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.privateKey' "$XRAY_CONFIG")" | grep 'Password (PublicKey):' | awk '{print $NF}')
+  SHORT_ID=$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.shortIds[0]' "$XRAY_CONFIG")
+  SERVER_NAME=$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.serverNames[0]' "$XRAY_CONFIG")
 }
 
 cmd_list() {
   log "Current clients in $XRAY_CONFIG:"
   local count
-  count=$(jq '.inbounds[0].settings.clients | length' "$XRAY_CONFIG")
+  count=$(jq '[.inbounds[] | select(.protocol == "vless")][0].settings.clients | length' "$XRAY_CONFIG")
   for (( i=0; i<count; i++ )); do
     local uuid flow
-    uuid=$(jq -r ".inbounds[0].settings.clients[$i].id" "$XRAY_CONFIG")
-    flow=$(jq -r ".inbounds[0].settings.clients[$i].flow // \"\"" "$XRAY_CONFIG")
+    uuid=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i].id" "$XRAY_CONFIG")
+    flow=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i].flow // \"\"" "$XRAY_CONFIG")
     local label=""
     if [[ -f "$LABELS_FILE" ]]; then
       label=$(grep "^${uuid}=" "$LABELS_FILE" 2>/dev/null | cut -d= -f2- || true)
@@ -60,17 +60,20 @@ cmd_add() {
 
   # Check if UUID already exists
   local existing
-  existing=$(jq -r ".inbounds[0].settings.clients[] | select(.id == \"$uuid\") | .id" "$XRAY_CONFIG")
+  existing=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[] | select(.id == \"$uuid\") | .id" "$XRAY_CONFIG")
   if [[ -n "$existing" ]]; then
     die "UUID $uuid already exists in config"
   fi
 
   log "Adding client: $uuid"
 
+  # Use label as email, fallback to uuid prefix
+  local email="${label:-${uuid:0:8}}"
+
   # Add to config
   local tmp
   tmp=$(mktemp)
-  jq ".inbounds[0].settings.clients += [{\"id\": \"$uuid\", \"flow\": \"xtls-rprx-vision\"}]" "$XRAY_CONFIG" > "$tmp"
+  jq "(.inbounds[] | select(.protocol == \"vless\")).settings.clients += [{\"id\": \"$uuid\", \"flow\": \"xtls-rprx-vision\", \"email\": \"$email\"}]" "$XRAY_CONFIG" > "$tmp"
   mv "$tmp" "$XRAY_CONFIG"
   chmod 0644 "$XRAY_CONFIG"
 
@@ -114,13 +117,13 @@ cmd_remove() {
   local uuid="$1"
 
   local existing
-  existing=$(jq -r ".inbounds[0].settings.clients[] | select(.id == \"$uuid\") | .id" "$XRAY_CONFIG")
+  existing=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[] | select(.id == \"$uuid\") | .id" "$XRAY_CONFIG")
   if [[ -z "$existing" ]]; then
     die "UUID $uuid not found in config"
   fi
 
   local count
-  count=$(jq '.inbounds[0].settings.clients | length' "$XRAY_CONFIG")
+  count=$(jq '[.inbounds[] | select(.protocol == "vless")][0].settings.clients | length' "$XRAY_CONFIG")
   if [[ "$count" -le 1 ]]; then
     die "Cannot remove the last client. At least one must remain."
   fi
@@ -128,7 +131,7 @@ cmd_remove() {
   log "Removing client: $uuid"
   local tmp
   tmp=$(mktemp)
-  jq "del(.inbounds[0].settings.clients[] | select(.id == \"$uuid\"))" "$XRAY_CONFIG" > "$tmp"
+  jq "del((.inbounds[] | select(.protocol == \"vless\")).settings.clients[] | select(.id == \"$uuid\"))" "$XRAY_CONFIG" > "$tmp"
   mv "$tmp" "$XRAY_CONFIG"
   chmod 0644 "$XRAY_CONFIG"
 
@@ -145,10 +148,10 @@ cmd_remove() {
 cmd_links() {
   get_server_info
   local count
-  count=$(jq '.inbounds[0].settings.clients | length' "$XRAY_CONFIG")
+  count=$(jq '[.inbounds[] | select(.protocol == "vless")][0].settings.clients | length' "$XRAY_CONFIG")
   for (( i=0; i<count; i++ )); do
     local uuid
-    uuid=$(jq -r ".inbounds[0].settings.clients[$i].id" "$XRAY_CONFIG")
+    uuid=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i].id" "$XRAY_CONFIG")
     local label=""
     if [[ -f "$LABELS_FILE" ]]; then
       label=$(grep "^${uuid}=" "$LABELS_FILE" 2>/dev/null | cut -d= -f2- || true)

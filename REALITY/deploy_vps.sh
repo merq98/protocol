@@ -215,19 +215,47 @@ sudo chmod 0644 "$TARGETS_JSON_DEST"
 
 sudo tee "$XRAY_CONFIG_FILE" > /dev/null <<EOF
 {
+  "stats": {},
+  "api": {
+    "tag": "api",
+    "services": ["StatsService"]
+  },
+  "policy": {
+    "levels": {
+      "0": {
+        "statsUserUplink": true,
+        "statsUserDownlink": true
+      }
+    },
+    "system": {
+      "statsInboundUplink": true,
+      "statsInboundDownlink": true
+    }
+  },
   "log": {
     "loglevel": "warning"
   },
   "inbounds": [
     {
+      "listen": "127.0.0.1",
+      "port": 10085,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "127.0.0.1"
+      },
+      "tag": "api"
+    },
+    {
       "listen": "0.0.0.0",
       "port": 443,
       "protocol": "vless",
+      "tag": "vless-in",
       "settings": {
         "clients": [
           {
             "id": "$UUID",
-            "flow": "xtls-rprx-vision"
+            "flow": "xtls-rprx-vision",
+            "email": "admin"
           }
         ],
         "decryption": "none"
@@ -266,7 +294,16 @@ sudo tee "$XRAY_CONFIG_FILE" > /dev/null <<EOF
       "protocol": "freedom",
       "tag": "direct"
     }
-  ]
+  ],
+  "routing": {
+    "rules": [
+      {
+        "inboundTag": ["api"],
+        "outboundTag": "api",
+        "type": "field"
+      }
+    ]
+  }
 }
 EOF
 
@@ -338,3 +375,15 @@ printf 'Server values saved to: %s\n' "$SERVER_VALUES_FILE"
 printf 'Client values saved to: %s\n' "$CLIENT_VALUES_FILE"
 printf '\nClient parameters:\n'
 cat "$CLIENT_VALUES_FILE"
+
+# --- Traffic limit cron ---
+log "Setting up traffic monitoring cron jobs"
+TRAFFIC_SCRIPT="$REPO_DIR/REALITY/check-traffic.sh"
+chmod +x "$TRAFFIC_SCRIPT"
+
+# Enforce every 10 minutes, reset daily at midnight
+(crontab -l 2>/dev/null | grep -v check-traffic || true; \
+ echo "*/10 * * * * sudo $TRAFFIC_SCRIPT enforce >> /var/log/xray-traffic.log 2>&1"; \
+ echo "0 0 * * * sudo $TRAFFIC_SCRIPT reset >> /var/log/xray-traffic.log 2>&1" \
+) | crontab -
+log "Cron jobs installed (enforce every 10 min, reset at midnight)"
