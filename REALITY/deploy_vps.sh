@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# deploy_vps.sh — First-time VPS setup for Xray REALITY.
+# deploy_vps.sh — First-time VPS setup or update for Xray REALITY.
 #
-# Run as root on a fresh Ubuntu server:
+# First-time install (as root):
 #   DEPLOY_USER_PASSWORD='YourPass!' bash deploy_vps.sh
+#
+# Update xray binary without touching config/clients:
+#   bash deploy_vps.sh update
 #
 # Or as an existing sudo user (skips user creation):
 #   bash deploy_vps.sh
@@ -76,6 +79,10 @@ install_go() {
   fi
   ensure_go_on_path
 }
+
+REPO_DIR="${PROTOCOL_ROOT}"
+
+DEPLOY_MODE="${1:-install}"
 
 log "Installing system packages"
 sudo apt update
@@ -154,7 +161,7 @@ ENVEOF
 #!/usr/bin/env bash
 set -euo pipefail
 source '$ENV_FILE'
-exec bash "\$PROTOCOL_ROOT/REALITY/deploy_vps.sh"
+exec bash "\$PROTOCOL_ROOT/REALITY/deploy_vps.sh" '$DEPLOY_MODE'
 WRAPEOF
   chmod 755 "$WRAPPER"
   chown "$DEPLOY_USER:$DEPLOY_USER" "$WRAPPER"
@@ -187,6 +194,31 @@ go mod tidy
 go build -trimpath -ldflags='-s -w' -o /tmp/xray ./main
 sudo install -m 0755 /tmp/xray "$XRAY_BIN"
 "$XRAY_BIN" version
+
+# --- UPDATE mode: rebuild binary + update targets, keep config/clients ---
+if [[ "$DEPLOY_MODE" == "update" ]]; then
+  log "Update mode: refreshing targets file"
+  sudo cp "$TARGETS_JSON_SOURCE" "$TARGETS_JSON_DEST"
+  sudo chown root:root "$TARGETS_JSON_DEST"
+  sudo chmod 0644 "$TARGETS_JSON_DEST"
+
+  # Set up cron if not present
+  if ! crontab -l 2>/dev/null | grep -q check-traffic; then
+    log "Installing traffic monitoring cron jobs"
+    TRAFFIC_SCRIPT="$REPO_DIR/REALITY/check-traffic.sh"
+    chmod +x "$TRAFFIC_SCRIPT"
+    (crontab -l 2>/dev/null || true; \
+     echo "*/10 * * * * sudo $TRAFFIC_SCRIPT enforce >> /var/log/xray-traffic.log 2>&1"; \
+     echo "0 0 * * * sudo $TRAFFIC_SCRIPT reset >> /var/log/xray-traffic.log 2>&1" \
+    ) | crontab -
+  fi
+
+  log "Restarting Xray"
+  sudo systemctl restart xray
+  sudo systemctl status xray --no-pager
+  log "Update complete — config and clients unchanged"
+  exit 0
+fi
 
 if [[ -n "$UUID" && -n "$SERVER_PRIVATE_KEY" && -n "$SERVER_PUBLIC_KEY" ]]; then
   log "Using UUID and REALITY keys from environment"
