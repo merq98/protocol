@@ -46,9 +46,11 @@ else
 fi
 
 # 3. Add tag to VLESS inbound if missing
-if jq -e '[.inbounds[] | select(.protocol == "vless")][0].tag' "$XRAY_CONFIG" | grep -q 'null'; then
+vless_tag=$(jq -r '[.inbounds | to_entries[] | select(.value.protocol == "vless")][0].value.tag // ""' "$XRAY_CONFIG")
+if [[ -z "$vless_tag" || "$vless_tag" == "null" ]]; then
   log "Adding tag 'vless-in' to VLESS inbound"
-  jq '(.inbounds[] | select(.protocol == "vless")).tag = "vless-in"' "$XRAY_CONFIG" > "$tmp"
+  local_idx=$(jq '[.inbounds | to_entries[] | select(.value.protocol == "vless")][0].key' "$XRAY_CONFIG")
+  jq ".inbounds[$local_idx].tag = \"vless-in\"" "$XRAY_CONFIG" > "$tmp"
   mv "$tmp" "$XRAY_CONFIG"
   tmp=$(mktemp)
 else
@@ -58,12 +60,15 @@ fi
 # 4. Add email to clients that don't have one
 log "Ensuring all clients have email field"
 LABELS_FILE="/usr/local/etc/xray/client-labels.txt"
-count=$(jq '[.inbounds[] | select(.protocol == "vless")][0].settings.clients | length' "$XRAY_CONFIG")
+
+# Find the index of the VLESS inbound in the inbounds array
+vless_idx=$(jq '[.inbounds | to_entries[] | select(.value.protocol == "vless")][0].key' "$XRAY_CONFIG")
+count=$(jq ".inbounds[$vless_idx].settings.clients | length" "$XRAY_CONFIG")
 changed=false
 for (( i=0; i<count; i++ )); do
-  email=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i].email // \"\"" "$XRAY_CONFIG")
+  email=$(jq -r ".inbounds[$vless_idx].settings.clients[$i].email // \"\"" "$XRAY_CONFIG")
   if [[ -z "$email" ]]; then
-    uuid=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i].id" "$XRAY_CONFIG")
+    uuid=$(jq -r ".inbounds[$vless_idx].settings.clients[$i].id" "$XRAY_CONFIG")
     # Try to find label
     label=""
     if [[ -f "$LABELS_FILE" ]]; then
@@ -71,7 +76,7 @@ for (( i=0; i<count; i++ )); do
     fi
     new_email="${label:-${uuid:0:8}}"
     log "  Client $uuid -> email=$new_email"
-    jq "([.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i]).email = \"$new_email\"" "$XRAY_CONFIG" > "$tmp"
+    jq ".inbounds[$vless_idx].settings.clients[$i].email = \"$new_email\"" "$XRAY_CONFIG" > "$tmp"
     mv "$tmp" "$XRAY_CONFIG"
     tmp=$(mktemp)
     changed=true
