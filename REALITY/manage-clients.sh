@@ -6,6 +6,7 @@
 #   ./manage-clients.sh add [label]       # generates UUID, prints client config
 #   ./manage-clients.sh add-uuid <uuid> [label]
 #   ./manage-clients.sh remove <uuid>
+#   ./manage-clients.sh links          # prints VLESS share links for all clients
 #
 # The script modifies /usr/local/etc/xray/config.json in place and restarts xray.
 
@@ -141,10 +142,29 @@ cmd_remove() {
   log "Client removed, Xray restarted"
 }
 
+cmd_links() {
+  get_server_info
+  local count
+  count=$(jq '.inbounds[0].settings.clients | length' "$XRAY_CONFIG")
+  for (( i=0; i<count; i++ )); do
+    local uuid
+    uuid=$(jq -r ".inbounds[0].settings.clients[$i].id" "$XRAY_CONFIG")
+    local label=""
+    if [[ -f "$LABELS_FILE" ]]; then
+      label=$(grep "^${uuid}=" "$LABELS_FILE" 2>/dev/null | cut -d= -f2- || true)
+    fi
+    printf 'vless://%s@%s:443?encryption=none&flow=xtls-rprx-vision&type=raw&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s#%s\n' \
+      "$uuid" "$SERVER_IP" "$SERVER_NAME" "$PUBLIC_KEY" "$SHORT_ID" "${label:-reality}"
+  done
+}
+
 # --- Main ---
 case "${1:-}" in
   list)
     cmd_list
+    ;;
+  links)
+    cmd_links
     ;;
   add)
     cmd_add "" "${2:-}"
@@ -158,7 +178,7 @@ case "${1:-}" in
     cmd_remove "$2"
     ;;
   *)
-    echo "Usage: $0 {list|add [label]|add-uuid <uuid> [label]|remove <uuid>}"
+    echo "Usage: $0 {list|add [label]|add-uuid <uuid> [label]|remove <uuid>|links}"
     exit 1
     ;;
 esac
