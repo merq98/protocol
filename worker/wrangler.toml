@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 # Set ORIGIN to your REALITY server address (host:port).
 # Override per environment or via `wrangler secret put ORIGIN`.
 [vars]
-ORIGIN = "YOUR_VPS_IP:443"
+ORIGIN = "37.220.83.19:443"
 
 # Optional: bind to a custom domain instead of *.workers.dev.
 # [routes]
