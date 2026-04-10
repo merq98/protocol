@@ -806,6 +806,7 @@ type REALITYConfig struct {
 	ShortId       string `json:"shortId"`
 	Mldsa65Verify string `json:"mldsa65Verify"`
 	SpiderX       string `json:"spiderX"`
+	WsRelay       string `json:"wsRelay"`
 }
 
 func (c *REALITYConfig) Build() (proto.Message, error) {
@@ -1008,6 +1009,7 @@ func (c *REALITYConfig) Build() (proto.Message, error) {
 		u.RawQuery = q.Encode()
 		config.SpiderX = u.String()
 		config.ServerName = c.ServerName
+		config.WsRelay = c.WsRelay
 	}
 	return config, nil
 }

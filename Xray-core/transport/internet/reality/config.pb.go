@@ -47,6 +47,7 @@ type Config struct {
 	SpiderX               string                 `protobuf:"bytes,26,opt,name=spider_x,json=spiderX,proto3" json:"spider_x,omitempty"`
 	SpiderY               []int64                `protobuf:"varint,27,rep,packed,name=spider_y,json=spiderY,proto3" json:"spider_y,omitempty"`
 	MasterKeyLog          string                 `protobuf:"bytes,31,opt,name=master_key_log,json=masterKeyLog,proto3" json:"master_key_log,omitempty"`
+	WsRelay               string                 `json:"wsRelay,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -245,6 +246,13 @@ func (x *Config) GetSpiderY() []int64 {
 func (x *Config) GetMasterKeyLog() string {
 	if x != nil {
 		return x.MasterKeyLog
+	}
+	return ""
+}
+
+func (x *Config) GetWsRelay() string {
+	if x != nil {
+		return x.WsRelay
 	}
 	return ""
 }

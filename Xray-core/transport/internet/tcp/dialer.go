@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	goreality "github.com/xtls/reality"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -19,7 +20,16 @@ import (
 // Dial dials a new TCP connection to the given destination.
 func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
 	errors.LogInfo(ctx, "dialing TCP to ", dest)
-	conn, err := internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
+
+	// If REALITY with wsRelay is configured, dial WebSocket instead of raw TCP.
+	var conn net.Conn
+	var err error
+	if rConfig := reality.ConfigFromStreamSettings(streamSettings); rConfig != nil && rConfig.WsRelay != "" {
+		errors.LogInfo(ctx, "using WS relay: ", rConfig.WsRelay)
+		conn, err = goreality.DialWS(ctx, rConfig.WsRelay)
+	} else {
+		conn, err = internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -15,6 +15,8 @@ set -euo pipefail
 XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
 XRAY_CONFIG="${XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
 LABELS_FILE="${LABELS_FILE:-/usr/local/etc/xray/client-labels.txt}"
+CLIENTS_LOG="${CLIENTS_LOG:-/usr/local/etc/xray/clients.txt}"
+WS_RELAY="${WS_RELAY:-}"
 
 die()  { printf 'Error: %s\n' "$1" >&2; exit 1; }
 log()  { printf '==> %s\n' "$1"; }
@@ -30,6 +32,44 @@ get_server_info() {
   PUBLIC_KEY=$("$XRAY_BIN" x25519 -i "$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.privateKey' "$XRAY_CONFIG")" | grep 'Password (PublicKey):' | awk '{print $NF}')
   SHORT_ID=$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.shortIds[0]' "$XRAY_CONFIG")
   SERVER_NAME=$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.serverNames[0]' "$XRAY_CONFIG")
+}
+
+# Generate VLESS link for a client
+make_vless_link() {
+  local uuid="$1" label="$2" suffix="${3:-}"
+  local tag="${label:-reality}"
+  [[ -n "$suffix" ]] && tag="${tag}-${suffix}"
+  printf 'vless://%s@%s:443?encryption=none&flow=xtls-rprx-vision&type=raw&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s#%s' \
+    "$uuid" "$SERVER_IP" "$SERVER_NAME" "$PUBLIC_KEY" "$SHORT_ID" "$tag"
+}
+
+# Save client record to clients.txt log
+save_client_record() {
+  local uuid="$1" label="$2" date_added
+  date_added=$(date '+%Y-%m-%d %H:%M')
+
+  get_server_info
+  local direct_link cf_link
+  direct_link=$(make_vless_link "$uuid" "$label" "direct")
+  cf_link=""
+  if [[ -n "$WS_RELAY" ]]; then
+    cf_link=$(make_vless_link "$uuid" "$label" "cf")
+  fi
+
+  {
+    printf '\n========================================\n'
+    printf 'Date:       %s\n' "$date_added"
+    printf 'UUID:       %s\n' "$uuid"
+    printf 'Label:      %s\n' "${label:--}"
+    printf 'Email:      %s\n' "${label:-${uuid:0:8}}"
+    printf '\nDirect link:\n%s\n' "$direct_link"
+    if [[ -n "$cf_link" ]]; then
+      printf '\nCloudflare link:\n'
+      printf '  wsRelay: %s\n' "$WS_RELAY"
+      printf '  link:    %s\n' "$cf_link"
+    fi
+    printf '========================================\n'
+  } >> "$CLIENTS_LOG"
 }
 
 cmd_list() {
@@ -107,9 +147,21 @@ cmd_add() {
     printf 'Label:      %s\n' "$label"
   fi
 
-  # Print VLESS share link
-  printf '\nvless://%s@%s:443?encryption=none&flow=xtls-rprx-vision&type=raw&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s#%s\n' \
-    "$uuid" "$SERVER_IP" "$SERVER_NAME" "$PUBLIC_KEY" "$SHORT_ID" "${label:-reality}"
+  # Print VLESS share links
+  local direct_link
+  direct_link=$(make_vless_link "$uuid" "$label" "direct")
+  printf '\n--- VLESS links ---\n'
+  printf 'Direct:     %s\n' "$direct_link"
+  if [[ -n "$WS_RELAY" ]]; then
+    local cf_link
+    cf_link=$(make_vless_link "$uuid" "$label" "cf")
+    printf 'Cloudflare: %s\n' "$cf_link"
+    printf '  (add "wsRelay": "%s" to realitySettings)\n' "$WS_RELAY"
+  fi
+
+  # Save to clients log
+  save_client_record "$uuid" "$label"
+  log "Client saved to $CLIENTS_LOG"
 }
 
 cmd_remove() {
@@ -156,9 +208,17 @@ cmd_links() {
     if [[ -f "$LABELS_FILE" ]]; then
       label=$(grep "^${uuid}=" "$LABELS_FILE" 2>/dev/null | cut -d= -f2- || true)
     fi
-    printf 'vless://%s@%s:443?encryption=none&flow=xtls-rprx-vision&type=raw&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s#%s\n' \
-      "$uuid" "$SERVER_IP" "$SERVER_NAME" "$PUBLIC_KEY" "$SHORT_ID" "${label:-reality}"
+    local tag="${label:-${uuid:0:8}}"
+    printf '\n[%s]\n' "$tag"
+    printf '  Direct:     %s\n' "$(make_vless_link "$uuid" "$label" "direct")"
+    if [[ -n "$WS_RELAY" ]]; then
+      printf '  Cloudflare: %s\n' "$(make_vless_link "$uuid" "$label" "cf")"
+    fi
   done
+  printf '\nTotal: %d client(s)\n' "$count"
+  if [[ -n "$WS_RELAY" ]]; then
+    printf 'WS Relay: %s\n' "$WS_RELAY"
+  fi
 }
 
 # --- Main ---
@@ -182,6 +242,9 @@ case "${1:-}" in
     ;;
   *)
     echo "Usage: $0 {list|add [label]|add-uuid <uuid> [label]|remove <uuid>|links}"
+    echo ""
+    echo "Environment:"
+    echo "  WS_RELAY=wss://your-worker.workers.dev  — enables Cloudflare links"
     exit 1
     ;;
 esac

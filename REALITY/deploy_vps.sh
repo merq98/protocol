@@ -33,6 +33,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-$HOME/xray-reality}"
 UUID="${UUID:-}"
 SERVER_PRIVATE_KEY="${SERVER_PRIVATE_KEY:-}"
 SERVER_PUBLIC_KEY="${SERVER_PUBLIC_KEY:-}"
+WS_RELAY="${WS_RELAY:-}"
 
 log() {
   printf '\n==> %s\n' "$1"
@@ -150,6 +151,7 @@ export SHORT_ID='$SHORT_ID'
 export UUID='$UUID'
 export SERVER_PRIVATE_KEY='$SERVER_PRIVATE_KEY'
 export SERVER_PUBLIC_KEY='$SERVER_PUBLIC_KEY'
+export WS_RELAY='$WS_RELAY'
 export DEPLOY_USER='$DEPLOY_USER'
 export OUTPUT_DIR='/home/$DEPLOY_USER/xray-reality'
 ENVEOF
