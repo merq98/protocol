@@ -7,6 +7,9 @@
 #   ./manage-clients.sh add-uuid <uuid> [label]
 #   ./manage-clients.sh remove <uuid>
 #   ./manage-clients.sh links          # prints VLESS share links for all clients
+#   ./manage-clients.sh unlimited list
+#   ./manage-clients.sh unlimited add <email>
+#   ./manage-clients.sh unlimited remove <email>
 #
 # The script modifies /usr/local/etc/xray/config.json in place and restarts xray.
 
@@ -16,10 +19,22 @@ XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
 XRAY_CONFIG="${XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
 LABELS_FILE="${LABELS_FILE:-/usr/local/etc/xray/client-labels.txt}"
 CLIENTS_LOG="${CLIENTS_LOG:-/usr/local/etc/xray/clients.txt}"
+EXEMPT_FILE="${EXEMPT_FILE:-/usr/local/etc/xray/unlimited-clients.json}"
 WS_RELAY="${WS_RELAY:-}"
 
 die()  { printf 'Error: %s\n' "$1" >&2; exit 1; }
 log()  { printf '==> %s\n' "$1"; }
+
+ensure_json_array_file() {
+  local path="$1"
+  [[ -f "$path" ]] || echo '[]' > "$path"
+}
+
+json_array_contains() {
+  local path="$1"
+  local value="$2"
+  [[ -f "$path" ]] && jq -e --arg value "$value" '.[] | select(. == $value)' "$path" > /dev/null 2>&1
+}
 
 require_root() {
   if [[ $EUID -ne 0 ]]; then
@@ -221,6 +236,54 @@ cmd_links() {
   fi
 }
 
+cmd_unlimited_list() {
+  ensure_json_array_file "$EXEMPT_FILE"
+  printf 'Unlimited users file: %s\n' "$EXEMPT_FILE"
+  jq -r '.[]' "$EXEMPT_FILE"
+}
+
+cmd_unlimited_add() {
+  require_root
+  local email="$1"
+  [[ -n "$email" ]] || die "Usage: $0 unlimited add <email>"
+  ensure_json_array_file "$EXEMPT_FILE"
+
+  if ! jq -e --arg email "$email" '[.inbounds[] | select(.protocol == "vless")][0].settings.clients[] | select(.email == $email)' "$XRAY_CONFIG" > /dev/null 2>&1; then
+    die "User with email '$email' not found in $XRAY_CONFIG"
+  fi
+
+  if json_array_contains "$EXEMPT_FILE" "$email"; then
+    log "User already unlimited: $email"
+    return 0
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg email "$email" '. += [$email]' "$EXEMPT_FILE" > "$tmp"
+  mv "$tmp" "$EXEMPT_FILE"
+  chmod 0644 "$EXEMPT_FILE"
+  log "Removed daily limit for: $email"
+}
+
+cmd_unlimited_remove() {
+  require_root
+  local email="$1"
+  [[ -n "$email" ]] || die "Usage: $0 unlimited remove <email>"
+  ensure_json_array_file "$EXEMPT_FILE"
+
+  if ! json_array_contains "$EXEMPT_FILE" "$email"; then
+    log "User is not in unlimited list: $email"
+    return 0
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg email "$email" '[.[] | select(. != $email)]' "$EXEMPT_FILE" > "$tmp"
+  mv "$tmp" "$EXEMPT_FILE"
+  chmod 0644 "$EXEMPT_FILE"
+  log "Restored daily limit for: $email"
+}
+
 # --- Main ---
 case "${1:-}" in
   list)
@@ -228,6 +291,24 @@ case "${1:-}" in
     ;;
   links)
     cmd_links
+    ;;
+  unlimited)
+    case "${2:-}" in
+      list)
+        cmd_unlimited_list
+        ;;
+      add)
+        [[ -n "${3:-}" ]] || die "Usage: $0 unlimited add <email>"
+        cmd_unlimited_add "$3"
+        ;;
+      remove)
+        [[ -n "${3:-}" ]] || die "Usage: $0 unlimited remove <email>"
+        cmd_unlimited_remove "$3"
+        ;;
+      *)
+        die "Usage: $0 unlimited {list|add <email>|remove <email>}"
+        ;;
+    esac
     ;;
   add)
     cmd_add "" "${2:-}"
@@ -241,7 +322,7 @@ case "${1:-}" in
     cmd_remove "$2"
     ;;
   *)
-    echo "Usage: $0 {list|add [label]|add-uuid <uuid> [label]|remove <uuid>|links}"
+    echo "Usage: $0 {list|add [label]|add-uuid <uuid> [label]|remove <uuid>|links|unlimited {list|add <email>|remove <email>}}"
     echo ""
     echo "Environment:"
     echo "  WS_RELAY=wss://your-worker.workers.dev  — enables Cloudflare links"

@@ -9,6 +9,7 @@
 # Environment:
 #   DAILY_LIMIT_GB=33   — daily limit in GB (default: 33)
 #   XRAY_API=127.0.0.1:10085 — Xray Stats API address
+#   EXEMPT_FILE=/usr/local/etc/xray/unlimited-clients.json — emails without daily limit
 
 set -euo pipefail
 
@@ -17,11 +18,74 @@ XRAY_CONFIG="${XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
 XRAY_API="${XRAY_API:-127.0.0.1:10085}"
 DAILY_LIMIT_GB="${DAILY_LIMIT_GB:-33}"
 DISABLED_FILE="${DISABLED_FILE:-/usr/local/etc/xray/disabled-clients.json}"
+EXEMPT_FILE="${EXEMPT_FILE:-/usr/local/etc/xray/unlimited-clients.json}"
 
 DAILY_LIMIT_BYTES=$(( DAILY_LIMIT_GB * 1024 * 1024 * 1024 ))
 
 die()  { printf 'Error: %s\n' "$1" >&2; exit 1; }
 log()  { printf '==> %s\n' "$1"; }
+
+require_root() {
+  if [[ $EUID -ne 0 ]]; then
+    die "Run with sudo"
+  fi
+}
+
+ensure_json_array_file() {
+  local path="$1"
+  [[ -f "$path" ]] || echo '[]' > "$path"
+}
+
+json_array_contains() {
+  local path="$1"
+  local value="$2"
+  [[ -f "$path" ]] && jq -e --arg value "$value" '.[] | select(. == $value)' "$path" > /dev/null 2>&1
+}
+
+is_exempt_email() {
+  local email="$1"
+  json_array_contains "$EXEMPT_FILE" "$email"
+}
+
+is_disabled_email() {
+  local email="$1"
+  json_array_contains "$DISABLED_FILE" "$email"
+}
+
+disabled_backup_path() {
+  local email="$1"
+  printf '/usr/local/etc/xray/disabled-client-%s.json' "$email"
+}
+
+remove_from_json_array() {
+  local path="$1"
+  local value="$2"
+  local tmp
+  tmp=$(mktemp)
+  jq --arg value "$value" '[.[] | select(. != $value)]' "$path" > "$tmp"
+  mv "$tmp" "$path"
+}
+
+reenable_client() {
+  local email="$1"
+  local backup
+  backup=$(disabled_backup_path "$email")
+  [[ -f "$backup" ]] || return 1
+
+  local client_json tmp
+  client_json=$(cat "$backup")
+  tmp=$(mktemp)
+  jq "(.inbounds[] | select(.protocol == \"vless\")).settings.clients += [$client_json]" "$XRAY_CONFIG" > "$tmp"
+  mv "$tmp" "$XRAY_CONFIG"
+  chmod 0644 "$XRAY_CONFIG"
+  rm -f "$backup"
+
+  if [[ -f "$DISABLED_FILE" ]]; then
+    remove_from_json_array "$DISABLED_FILE" "$email"
+  fi
+
+  return 0
+}
 
 # Get list of emails from config
 get_emails() {
@@ -58,13 +122,17 @@ cmd_status() {
 
   while IFS= read -r email; do
     [[ -z "$email" ]] && continue
-    local down up total pct status
+    local down up total pct status pct_display
     down=$(get_user_traffic "$email" "downlink")
     up=$(get_user_traffic "$email" "uplink")
     total=$(( down + up ))
     pct=$(( total * 100 / DAILY_LIMIT_BYTES ))
+    pct_display="${pct}%"
 
-    if [[ -f "$DISABLED_FILE" ]] && jq -e ".[] | select(. == \"$email\")" "$DISABLED_FILE" > /dev/null 2>&1; then
+    if is_exempt_email "$email"; then
+      status="EXEMPT"
+      pct_display="∞"
+    elif is_disabled_email "$email"; then
       status="DISABLED"
     elif (( total >= DAILY_LIMIT_BYTES )); then
       status="OVER LIMIT"
@@ -72,18 +140,20 @@ cmd_status() {
       status="OK"
     fi
 
-    printf '%-20s %12s %12s %12s %7d%%  %s\n' \
-      "$email" "$(human_bytes "$down")" "$(human_bytes "$up")" "$(human_bytes "$total")" "$pct" "$status"
+    printf '%-20s %12s %12s %12s %8s  %s\n' \
+      "$email" "$(human_bytes "$down")" "$(human_bytes "$up")" "$(human_bytes "$total")" "$pct_display" "$status"
   done <<< "$emails"
 
   printf '\nDaily limit: %d GB\n' "$DAILY_LIMIT_GB"
+  printf 'Exempt users file: %s\n' "$EXEMPT_FILE"
 }
 
 cmd_enforce() {
   log "Enforcing daily limit of ${DAILY_LIMIT_GB} GB..."
 
   # Initialize disabled file if needed
-  [[ -f "$DISABLED_FILE" ]] || echo '[]' > "$DISABLED_FILE"
+  ensure_json_array_file "$DISABLED_FILE"
+  ensure_json_array_file "$EXEMPT_FILE"
 
   local emails changed=false
   emails=$(get_emails)
@@ -96,8 +166,16 @@ cmd_enforce() {
     total=$(( down + up ))
 
     local is_disabled=false
-    if jq -e ".[] | select(. == \"$email\")" "$DISABLED_FILE" > /dev/null 2>&1; then
+    if is_disabled_email "$email"; then
       is_disabled=true
+    fi
+
+    if is_exempt_email "$email"; then
+      if [[ "$is_disabled" == "true" ]] && reenable_client "$email"; then
+        log "Re-enabled exempt user: $email"
+        changed=true
+      fi
+      continue
     fi
 
     if (( total >= DAILY_LIMIT_BYTES )) && [[ "$is_disabled" == "false" ]]; then
@@ -110,12 +188,12 @@ cmd_enforce() {
         # Save to disabled list with full client info
         local tmp
         tmp=$(mktemp)
-        jq ". += [\"$email\"]" "$DISABLED_FILE" > "$tmp"
+        jq --arg email "$email" '. += [$email]' "$DISABLED_FILE" > "$tmp"
         mv "$tmp" "$DISABLED_FILE"
 
         # Save client object for re-enabling
         jq "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[] | select(.email == \"$email\")" "$XRAY_CONFIG" \
-          >> "/usr/local/etc/xray/disabled-client-${email}.json"
+          > "$(disabled_backup_path "$email")"
 
         # Remove from config
         tmp=$(mktemp)
@@ -141,28 +219,26 @@ cmd_reset() {
 
   # Re-enable disabled clients
   if [[ -f "$DISABLED_FILE" ]]; then
+    ensure_json_array_file "$EXEMPT_FILE"
     local disabled_emails
     disabled_emails=$(jq -r '.[]' "$DISABLED_FILE" 2>/dev/null || true)
     local changed=false
 
     while IFS= read -r email; do
       [[ -z "$email" ]] && continue
-      local backup="/usr/local/etc/xray/disabled-client-${email}.json"
+      if is_exempt_email "$email"; then
+        continue
+      fi
+      local backup
+      backup=$(disabled_backup_path "$email")
       if [[ -f "$backup" ]]; then
         log "Re-enabling: $email"
-        local client_json
-        client_json=$(cat "$backup")
-        local tmp
-        tmp=$(mktemp)
-        jq "(.inbounds[] | select(.protocol == \"vless\")).settings.clients += [$client_json]" "$XRAY_CONFIG" > "$tmp"
-        mv "$tmp" "$XRAY_CONFIG"
-        chmod 0644 "$XRAY_CONFIG"
-        rm -f "$backup"
+        reenable_client "$email"
         changed=true
       fi
     done <<< "$disabled_emails"
 
-    # Clear disabled list
+    # Clear disabled list after re-enable cycle.
     echo '[]' > "$DISABLED_FILE"
 
     if [[ "$changed" == "true" ]]; then
@@ -203,6 +279,7 @@ case "${1:-}" in
     echo "  status   — show traffic usage for all users"
     echo "  enforce  — disable users who exceeded daily limit (${DAILY_LIMIT_GB} GB)"
     echo "  reset    — reset counters and re-enable disabled users (daily cron)"
+    echo "  exempt users are taken from: $EXEMPT_FILE"
     exit 1
     ;;
 esac
