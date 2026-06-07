@@ -42,11 +42,32 @@ require_root() {
   fi
 }
 
+vless_inbound_idx() {
+  jq -r '[.inbounds // [] | to_entries[] | select(.value.protocol == "vless")][0].key // empty' "$XRAY_CONFIG"
+}
+
+require_vless_inbound() {
+  [[ -f "$XRAY_CONFIG" ]] || die "Config not found: $XRAY_CONFIG"
+  local idx
+  idx=$(vless_inbound_idx)
+  [[ -n "$idx" ]] || die "No VLESS inbound found in $XRAY_CONFIG"
+  printf '%s' "$idx"
+}
+
 get_server_info() {
-  SERVER_IP=$(hostname -I | awk '{print $1}')
-  PUBLIC_KEY=$("$XRAY_BIN" x25519 -i "$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.privateKey' "$XRAY_CONFIG")" | grep 'Password (PublicKey):' | awk '{print $NF}')
-  SHORT_ID=$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.shortIds[0]' "$XRAY_CONFIG")
-  SERVER_NAME=$(jq -r '[.inbounds[] | select(.protocol == "vless")][0].streamSettings.realitySettings.serverNames[0]' "$XRAY_CONFIG")
+  local idx private_key
+  idx=$(require_vless_inbound)
+  SERVER_IP="${SERVER_IP:-$(hostname -I | awk '{print $1}')}"
+
+  private_key=$(jq -r --argjson idx "$idx" '.inbounds[$idx].streamSettings.realitySettings.privateKey // empty' "$XRAY_CONFIG")
+  [[ -n "$private_key" ]] || die "REALITY privateKey missing in $XRAY_CONFIG"
+
+  PUBLIC_KEY=$("$XRAY_BIN" x25519 -i "$private_key" | grep 'Password (PublicKey):' | awk '{print $NF}')
+  [[ -n "$PUBLIC_KEY" ]] || die "Failed to derive REALITY public key"
+
+  SHORT_ID=$(jq -r --argjson idx "$idx" '.inbounds[$idx].streamSettings.realitySettings.shortIds[0] // empty' "$XRAY_CONFIG")
+  SERVER_NAME=$(jq -r --argjson idx "$idx" '.inbounds[$idx].streamSettings.realitySettings.serverNames[0] // empty' "$XRAY_CONFIG")
+  [[ -n "$SHORT_ID" && -n "$SERVER_NAME" ]] || die "REALITY shortIds/serverNames missing in $XRAY_CONFIG"
 }
 
 # Generate VLESS link for a client
@@ -88,13 +109,14 @@ save_client_record() {
 }
 
 cmd_list() {
+  local idx count
+  idx=$(require_vless_inbound)
   log "Current clients in $XRAY_CONFIG:"
-  local count
-  count=$(jq '[.inbounds[] | select(.protocol == "vless")][0].settings.clients | length' "$XRAY_CONFIG")
+  count=$(jq --argjson idx "$idx" '.inbounds[$idx].settings.clients // [] | length' "$XRAY_CONFIG")
   for (( i=0; i<count; i++ )); do
     local uuid flow
-    uuid=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i].id" "$XRAY_CONFIG")
-    flow=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i].flow // \"\"" "$XRAY_CONFIG")
+    uuid=$(jq -r --argjson idx "$idx" --argjson i "$i" '.inbounds[$idx].settings.clients[$i].id' "$XRAY_CONFIG")
+    flow=$(jq -r --argjson idx "$idx" --argjson i "$i" '.inbounds[$idx].settings.clients[$i].flow // ""' "$XRAY_CONFIG")
     local label=""
     if [[ -f "$LABELS_FILE" ]]; then
       label=$(grep "^${uuid}=" "$LABELS_FILE" 2>/dev/null | cut -d= -f2- || true)
@@ -110,12 +132,16 @@ cmd_list() {
 
 cmd_add() {
   require_root
-  local uuid="${1:-$("$XRAY_BIN" uuid | tail -n 1 | tr -d '\r')}"
-  local label="${2:-}"
+  local idx uuid="${1:-$("$XRAY_BIN" uuid | tail -n 1 | tr -d '\r')}" label="${2:-}"
+
+  idx=$(require_vless_inbound)
 
   # Check if UUID already exists
   local existing
-  existing=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[] | select(.id == \"$uuid\") | .id" "$XRAY_CONFIG")
+  existing=$(jq -r --argjson idx "$idx" --arg uuid "$uuid" '
+    .inbounds[$idx].settings.clients // []
+    | map(select(.id == $uuid)) | .[0].id // empty
+  ' "$XRAY_CONFIG")
   if [[ -n "$existing" ]]; then
     die "UUID $uuid already exists in config"
   fi
@@ -128,7 +154,13 @@ cmd_add() {
   # Add to config
   local tmp
   tmp=$(mktemp)
-  jq "(.inbounds[] | select(.protocol == \"vless\")).settings.clients += [{\"id\": \"$uuid\", \"flow\": \"xtls-rprx-vision\", \"email\": \"$email\"}]" "$XRAY_CONFIG" > "$tmp"
+  jq --argjson idx "$idx" --arg uuid "$uuid" --arg email "$email" '
+    .inbounds[$idx].settings.clients = ((.inbounds[$idx].settings.clients // []) + [{
+      "id": $uuid,
+      "flow": "xtls-rprx-vision",
+      "email": $email
+    }])
+  ' "$XRAY_CONFIG" > "$tmp"
   mv "$tmp" "$XRAY_CONFIG"
   chmod 0644 "$XRAY_CONFIG"
 
@@ -181,16 +213,21 @@ cmd_add() {
 
 cmd_remove() {
   require_root
-  local uuid="$1"
+  local idx uuid="$1"
+
+  idx=$(require_vless_inbound)
 
   local existing
-  existing=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[] | select(.id == \"$uuid\") | .id" "$XRAY_CONFIG")
+  existing=$(jq -r --argjson idx "$idx" --arg uuid "$uuid" '
+    .inbounds[$idx].settings.clients // []
+    | map(select(.id == $uuid)) | .[0].id // empty
+  ' "$XRAY_CONFIG")
   if [[ -z "$existing" ]]; then
     die "UUID $uuid not found in config"
   fi
 
   local count
-  count=$(jq '[.inbounds[] | select(.protocol == "vless")][0].settings.clients | length' "$XRAY_CONFIG")
+  count=$(jq --argjson idx "$idx" '.inbounds[$idx].settings.clients // [] | length' "$XRAY_CONFIG")
   if [[ "$count" -le 1 ]]; then
     die "Cannot remove the last client. At least one must remain."
   fi
@@ -198,7 +235,9 @@ cmd_remove() {
   log "Removing client: $uuid"
   local tmp
   tmp=$(mktemp)
-  jq "del((.inbounds[] | select(.protocol == \"vless\")).settings.clients[] | select(.id == \"$uuid\"))" "$XRAY_CONFIG" > "$tmp"
+  jq --argjson idx "$idx" --arg uuid "$uuid" '
+    .inbounds[$idx].settings.clients |= map(select(.id != $uuid))
+  ' "$XRAY_CONFIG" > "$tmp"
   mv "$tmp" "$XRAY_CONFIG"
   chmod 0644 "$XRAY_CONFIG"
 
@@ -213,12 +252,13 @@ cmd_remove() {
 }
 
 cmd_links() {
+  local idx count
+  idx=$(require_vless_inbound)
   get_server_info
-  local count
-  count=$(jq '[.inbounds[] | select(.protocol == "vless")][0].settings.clients | length' "$XRAY_CONFIG")
+  count=$(jq --argjson idx "$idx" '.inbounds[$idx].settings.clients // [] | length' "$XRAY_CONFIG")
   for (( i=0; i<count; i++ )); do
     local uuid
-    uuid=$(jq -r "[.inbounds[] | select(.protocol == \"vless\")][0].settings.clients[$i].id" "$XRAY_CONFIG")
+    uuid=$(jq -r --argjson idx "$idx" --argjson i "$i" '.inbounds[$idx].settings.clients[$i].id' "$XRAY_CONFIG")
     local label=""
     if [[ -f "$LABELS_FILE" ]]; then
       label=$(grep "^${uuid}=" "$LABELS_FILE" 2>/dev/null | cut -d= -f2- || true)
@@ -248,7 +288,12 @@ cmd_unlimited_add() {
   [[ -n "$email" ]] || die "Usage: $0 unlimited add <email>"
   ensure_json_array_file "$EXEMPT_FILE"
 
-  if ! jq -e --arg email "$email" '[.inbounds[] | select(.protocol == "vless")][0].settings.clients[] | select(.email == $email)' "$XRAY_CONFIG" > /dev/null 2>&1; then
+  local idx
+  idx=$(require_vless_inbound)
+  if ! jq -e --argjson idx "$idx" --arg email "$email" '
+    .inbounds[$idx].settings.clients // []
+    | map(select(.email == $email)) | length > 0
+  ' "$XRAY_CONFIG" > /dev/null 2>&1; then
     die "User with email '$email' not found in $XRAY_CONFIG"
   fi
 

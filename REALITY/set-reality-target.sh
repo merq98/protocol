@@ -27,7 +27,6 @@ PROTOCOL_ROOT="${PROTOCOL_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TARGETS_JSON_SOURCE="${TARGETS_JSON_SOURCE:-$PROTOCOL_ROOT/REALITY/WHITE_LIST_SITES_2026.json}"
 TARGETS_JSON_DEST="${TARGETS_JSON_DEST:-/usr/local/etc/xray/WHITE_LIST_SITES_2026.json}"
 TARGETS_ROTATE_SECONDS="${TARGETS_ROTATE_SECONDS:-300}"
-VLESS_REALITY_JQ='.inbounds[] | select(.protocol == "vless") | .streamSettings.realitySettings'
 
 die()  { printf 'Error: %s\n' "$1" >&2; exit 1; }
 log()  { printf '==> %s\n' "$1"; }
@@ -42,6 +41,18 @@ require_tools() {
   command -v jq >/dev/null 2>&1 || die "jq is required"
   [[ -f "$XRAY_CONFIG" ]] || die "Config not found: $XRAY_CONFIG"
   [[ -x "$XRAY_BIN" ]] || die "Xray binary not found: $XRAY_BIN"
+}
+
+vless_inbound_idx() {
+  jq -r '[.inbounds // [] | to_entries[] | select(.value.protocol == "vless")][0].key // empty' "$XRAY_CONFIG"
+}
+
+require_vless_inbound() {
+  require_tools
+  local idx
+  idx=$(vless_inbound_idx)
+  [[ -n "$idx" ]] || die "No VLESS inbound found in $XRAY_CONFIG"
+  printf '%s' "$idx"
 }
 
 normalize_target() {
@@ -65,8 +76,12 @@ target_host() {
 }
 
 cmd_show() {
-  require_tools
-  jq "${VLESS_REALITY_JQ} | {target, serverNames, targetsFile, targetsRotateSeconds}" "$XRAY_CONFIG"
+  local idx
+  idx=$(require_vless_inbound)
+  jq --argjson idx "$idx" '
+    .inbounds[$idx].streamSettings.realitySettings
+    | {target, serverNames, targetsFile, targetsRotateSeconds}
+  ' "$XRAY_CONFIG"
 }
 
 cmd_verify() {
@@ -100,7 +115,7 @@ cmd_verify() {
   log "Target looks reachable from this VPS"
 }
 
-apply_and_restart() {
+apply_jq_update() {
   require_root
   require_tools
 
@@ -163,13 +178,23 @@ cmd_set() {
     cmd_verify "$target"
   fi
 
-  local jq_filter
+  local idx
+  idx=$(require_vless_inbound)
+
   if [[ "$keep_pool" -eq 1 ]]; then
-    jq_filter="${VLESS_REALITY_JQ} |= . + {target: \$target, serverNames: \$names}"
-    apply_and_restart "$jq_filter" --arg target "$target" --argjson names "$names_json"
+    apply_jq_update --argjson idx "$idx" --arg target "$target" --argjson names "$names_json" '
+      .inbounds[$idx].streamSettings.realitySettings |= . + {
+        target: $target,
+        serverNames: $names
+      }
+    '
   else
-    jq_filter="${VLESS_REALITY_JQ} |= (. + {target: \$target, serverNames: \$names} | del(.targetsFile, .targetsRotateSeconds))"
-    apply_and_restart "$jq_filter" --arg target "$target" --argjson names "$names_json"
+    apply_jq_update --argjson idx "$idx" --arg target "$target" --argjson names "$names_json" '
+      .inbounds[$idx].streamSettings.realitySettings |= (
+        . + {target: $target, serverNames: $names}
+        | del(.targetsFile, .targetsRotateSeconds)
+      )
+    '
   fi
 
   log "Update complete"
@@ -196,9 +221,14 @@ cmd_pool() {
   chown root:root "$TARGETS_JSON_DEST"
   chmod 0644 "$TARGETS_JSON_DEST"
 
-  local jq_filter
-  jq_filter="${VLESS_REALITY_JQ} |= . + {targetsFile: \$pool, targetsRotateSeconds: \$rotate} | del(.target)"
-  apply_and_restart "$jq_filter" --arg pool "$TARGETS_JSON_DEST" --argjson rotate "$rotate_seconds"
+  local idx
+  idx=$(require_vless_inbound)
+  apply_jq_update --argjson idx "$idx" --arg pool "$TARGETS_JSON_DEST" --argjson rotate "$rotate_seconds" '
+    .inbounds[$idx].streamSettings.realitySettings |= (
+      . + {targetsFile: $pool, targetsRotateSeconds: $rotate}
+      | del(.target)
+    )
+  '
 
   log "Target pool enabled (rotate every ${rotate_seconds}s)"
 }
