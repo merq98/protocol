@@ -27,6 +27,7 @@ PROTOCOL_ROOT="${PROTOCOL_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 TARGETS_JSON_SOURCE="${TARGETS_JSON_SOURCE:-$PROTOCOL_ROOT/REALITY/WHITE_LIST_SITES_2026.json}"
 TARGETS_JSON_DEST="${TARGETS_JSON_DEST:-/usr/local/etc/xray/WHITE_LIST_SITES_2026.json}"
 TARGETS_ROTATE_SECONDS="${TARGETS_ROTATE_SECONDS:-300}"
+VLESS_REALITY_JQ='.inbounds[] | select(.protocol == "vless") | .streamSettings.realitySettings'
 
 die()  { printf 'Error: %s\n' "$1" >&2; exit 1; }
 log()  { printf '==> %s\n' "$1"; }
@@ -41,10 +42,6 @@ require_tools() {
   command -v jq >/dev/null 2>&1 || die "jq is required"
   [[ -f "$XRAY_CONFIG" ]] || die "Config not found: $XRAY_CONFIG"
   [[ -x "$XRAY_BIN" ]] || die "Xray binary not found: $XRAY_BIN"
-}
-
-vless_reality_jq_path() {
-  printf '%s' '.inbounds[] | select(.protocol == "vless") | .streamSettings.realitySettings'
 }
 
 normalize_target() {
@@ -69,7 +66,7 @@ target_host() {
 
 cmd_show() {
   require_tools
-  jq "$(vless_reality_jq_path()) | {target, serverNames, targetsFile, targetsRotateSeconds}" "$XRAY_CONFIG"
+  jq "${VLESS_REALITY_JQ} | {target, serverNames, targetsFile, targetsRotateSeconds}" "$XRAY_CONFIG"
 }
 
 cmd_verify() {
@@ -168,10 +165,10 @@ cmd_set() {
 
   local jq_filter
   if [[ "$keep_pool" -eq 1 ]]; then
-    jq_filter=$(printf '%s' "$(vless_reality_jq_path()) |= . + {target: \$target, serverNames: \$names}")
+    jq_filter="${VLESS_REALITY_JQ} |= . + {target: \$target, serverNames: \$names}"
     apply_and_restart "$jq_filter" --arg target "$target" --argjson names "$names_json"
   else
-    jq_filter=$(printf '%s' "$(vless_reality_jq_path()) |= (. + {target: \$target, serverNames: \$names} | del(.targetsFile, .targetsRotateSeconds))")
+    jq_filter="${VLESS_REALITY_JQ} |= (. + {target: \$target, serverNames: \$names} | del(.targetsFile, .targetsRotateSeconds))"
     apply_and_restart "$jq_filter" --arg target "$target" --argjson names "$names_json"
   fi
 
@@ -200,7 +197,7 @@ cmd_pool() {
   chmod 0644 "$TARGETS_JSON_DEST"
 
   local jq_filter
-  jq_filter=$(printf '%s' "$(vless_reality_jq_path()) |= . + {targetsFile: \$pool, targetsRotateSeconds: \$rotate} | del(.target)")
+  jq_filter="${VLESS_REALITY_JQ} |= . + {targetsFile: \$pool, targetsRotateSeconds: \$rotate} | del(.target)"
   apply_and_restart "$jq_filter" --arg pool "$TARGETS_JSON_DEST" --argjson rotate "$rotate_seconds"
 
   log "Target pool enabled (rotate every ${rotate_seconds}s)"
