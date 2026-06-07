@@ -57,6 +57,51 @@ SERVER_NAME_1='rg.ru' SERVER_NAME_2='aif.ru' TARGET_DEST='rg.ru:443' SHORT_ID='0
 UUID='your-uuid' SERVER_PRIVATE_KEY='your-private-key' SERVER_PUBLIC_KEY='your-public-key' bash /home/merq/protocol/REALITY/deploy_vps.sh
 ```
 
+## Сменить REALITY target на уже работающем сервере
+
+Не правь `config.json` руками через `jq`. Используй скрипт из репозитория:
+
+```bash
+cd /home/merq/protocol/REALITY
+git pull
+
+# Посмотреть текущий target
+sudo ./set-reality-target.sh show
+
+# Проверить, что сайт доступен с VPS (TLS 1.3 / H2 желательны)
+sudo ./set-reality-target.sh verify www.google.com
+
+# Поставить фиксированный target и обновить serverNames
+sudo ./set-reality-target.sh set www.google.com
+```
+
+Скрипт сам:
+
+- сделает бэкап `config.json`
+- обновит `target` и `serverNames`
+- уберёт `targetsFile` / `targetsRotateSeconds` (пул отключается)
+- прогонит `xray run -test` и перезапустит сервис
+
+Через `deploy_vps.sh` (то же самое):
+
+```bash
+REALITY_TARGET_MODE=set TARGET_DEST=www.google.com SERVER_NAME_1=www.google.com bash /home/merq/protocol/REALITY/deploy_vps.sh update
+```
+
+Вернуть ротацию по пулу из `WHITE_LIST_SITES_2026.json`:
+
+```bash
+sudo ./set-reality-target.sh pool
+# или
+bash /home/merq/protocol/REALITY/deploy_vps.sh update
+```
+
+После смены target обнови **serverName / SNI** в v2rayN и перезапусти клиент:
+
+```bash
+sudo ./manage-clients.sh links
+```
+
 ## Шаг 2. Установить пакеты и собрать Xray
 
 ```bash

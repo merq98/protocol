@@ -4,8 +4,14 @@
 # First-time install (as root):
 #   DEPLOY_USER_PASSWORD='YourPass!' bash deploy_vps.sh
 #
-# Update xray binary without touching config/clients:
+# Update targets pool without touching clients (default):
 #   bash deploy_vps.sh update
+#
+# Switch to a fixed REALITY target on a running server:
+#   REALITY_TARGET_MODE=set TARGET_DEST=www.google.com SERVER_NAME_1=www.google.com bash deploy_vps.sh update
+# Or directly on the VPS:
+#   sudo ./REALITY/set-reality-target.sh verify www.google.com
+#   sudo ./REALITY/set-reality-target.sh set www.google.com
 #
 # Or as an existing sudo user (skips user creation):
 #   bash deploy_vps.sh
@@ -28,6 +34,7 @@ TARGETS_ROTATE_SECONDS="${TARGETS_ROTATE_SECONDS:-300}"
 SERVER_NAME_1="${SERVER_NAME_1:-rg.ru}"
 SERVER_NAME_2="${SERVER_NAME_2:-aif.ru}"
 TARGET_DEST="${TARGET_DEST:-rg.ru:443}"
+REALITY_TARGET_MODE="${REALITY_TARGET_MODE:-pool}"
 SHORT_ID="${SHORT_ID:-0123456789abcdef}"
 OUTPUT_DIR="${OUTPUT_DIR:-$HOME/xray-reality}"
 UUID="${UUID:-}"
@@ -197,17 +204,14 @@ go build -trimpath -ldflags='-s -w' -o /tmp/xray ./main
 sudo install -m 0755 /tmp/xray "$XRAY_BIN"
 "$XRAY_BIN" version
 
-# --- UPDATE mode: rebuild binary + update targets, keep config/clients ---
+# --- UPDATE mode: refresh pool or set fixed target, keep clients ---
 if [[ "$DEPLOY_MODE" == "update" ]]; then
-  log "Update mode: refreshing targets file"
-  sudo cp "$TARGETS_JSON_SOURCE" "$TARGETS_JSON_DEST"
-  sudo chown root:root "$TARGETS_JSON_DEST"
-  sudo chmod 0644 "$TARGETS_JSON_DEST"
+  SET_TARGET_SCRIPT="$PROTOCOL_ROOT/REALITY/set-reality-target.sh"
 
   # Set up cron if not present
   if ! crontab -l 2>/dev/null | grep -q check-traffic; then
     log "Installing traffic monitoring cron jobs"
-    TRAFFIC_SCRIPT="$REPO_DIR/REALITY/check-traffic.sh"
+    TRAFFIC_SCRIPT="$PROTOCOL_ROOT/REALITY/check-traffic.sh"
     chmod +x "$TRAFFIC_SCRIPT"
     (crontab -l 2>/dev/null || true; \
      echo "*/10 * * * * sudo $TRAFFIC_SCRIPT enforce >> /var/log/xray-traffic.log 2>&1"; \
@@ -215,10 +219,37 @@ if [[ "$DEPLOY_MODE" == "update" ]]; then
     ) | crontab -
   fi
 
-  log "Restarting Xray"
-  sudo systemctl restart xray
-  sudo systemctl status xray --no-pager
-  log "Update complete — config and clients unchanged"
+  case "$REALITY_TARGET_MODE" in
+    set)
+      require_file "$SET_TARGET_SCRIPT"
+      chmod +x "$SET_TARGET_SCRIPT"
+      log "Update mode: setting fixed REALITY target to $TARGET_DEST"
+
+      names_args=()
+      [[ -n "$SERVER_NAME_1" ]] && names_args+=(--name "$SERVER_NAME_1")
+      [[ -n "$SERVER_NAME_2" && "$SERVER_NAME_2" != "$SERVER_NAME_1" ]] && names_args+=(--name "$SERVER_NAME_2")
+
+      sudo VERIFY_TARGET="${VERIFY_TARGET:-1}" bash "$SET_TARGET_SCRIPT" set "$TARGET_DEST" "${names_args[@]}"
+      log "Update complete — clients unchanged; update serverName in v2rayN"
+      ;;
+    pool)
+      require_file "$SET_TARGET_SCRIPT"
+      chmod +x "$SET_TARGET_SCRIPT"
+      log "Update mode: refreshing targets pool"
+      sudo bash "$SET_TARGET_SCRIPT" pool --rotate-seconds "$TARGETS_ROTATE_SECONDS"
+      log "Update complete — config and clients unchanged"
+      ;;
+    skip)
+      log "Update mode: skipping target changes"
+      sudo systemctl restart xray
+      sudo systemctl status xray --no-pager
+      log "Update complete — config and clients unchanged"
+      ;;
+    *)
+      printf 'Unknown REALITY_TARGET_MODE: %s (use set, pool, or skip)\n' "$REALITY_TARGET_MODE" >&2
+      exit 1
+      ;;
+  esac
   exit 0
 fi
 
