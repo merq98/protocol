@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# set-ws-relay.sh — Configure Cloudflare WebSocket relay URL in REALITY server config.
+# set-ws-relay.sh — Store wsRelay URL in REALITY server config (metadata / CF flow).
+# For self-hosted relay on VPS-2, clients are patched via set-v2rayn-ws-relay.ps1 instead.
 #
 # Usage:
 #   sudo ./set-ws-relay.sh show

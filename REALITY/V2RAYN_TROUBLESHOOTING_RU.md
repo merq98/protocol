@@ -45,7 +45,7 @@ cd C:\Users\Stas\Documents\Projects\protocol\REALITY
 .\generate-v2rayn-tun-profile.ps1 -Preset tun-system -FixSingboxUdp443
 ```
 
-Подробнее: [TUN_DIAGNOSTICS.md](TUN_DIAGNOSTICS.md), Cloudflare relay: [DEPLOY_CF_RELAY_RU.md](DEPLOY_CF_RELAY_RU.md).
+Подробнее: [TUN_DIAGNOSTICS.md](TUN_DIAGNOSTICS.md), Cloudflare relay: [DEPLOY_CF_RELAY_RU.md](DEPLOY_CF_RELAY_RU.md), self-hosted WSS relay: [DEPLOY_SELF_HOSTED_WS_RELAY_RU.md](DEPLOY_SELF_HOSTED_WS_RELAY_RU.md).
 
 ## Что нажать в v2rayN
 
@@ -358,9 +358,17 @@ dns: exchange failed
 
 ## Если direct-профиль нестабилен (-1 ms, timeout)
 
-Прямой REALITY на `37.220.83.19` режется провайдером. Используй Cloudflare WS relay:
+Прямой REALITY на `37.220.83.19` режется провайдером. Используй WSS relay:
+
+**Вариант A — Cloudflare Worker** (если есть CF аккаунт):
 
 1. Деплой: [DEPLOY_CF_RELAY_RU.md](DEPLOY_CF_RELAY_RU.md)
-2. На VPS: `sudo ./set-ws-relay.sh set wss://....workers.dev`
-3. Импорт **Cloudflare:** ссылки из `WS_RELAY=... sudo ./manage-clients.sh links`
-4. После стабильного CF-профиля — включать TUN
+2. Windows: `.\set-v2rayn-ws-relay.ps1 -WsRelayUrl "wss://....workers.dev" -ApplySafePreset`
+
+**Вариант B — свой домен + VPS-2** (без Cloudflare):
+
+1. Деплой: [DEPLOY_SELF_HOSTED_WS_RELAY_RU.md](DEPLOY_SELF_HOSTED_WS_RELAY_RU.md)
+2. VPS-2: `sudo ./deploy-wsrelay-vps.sh install --origin 37.220.83.19:443 --domain relay.<domain>`
+3. Windows: `.\set-v2rayn-ws-relay.ps1 -WsRelayUrl "wss://relay.<domain>/ws" -ApplySafePreset`
+
+После стабильного SOCKS через relay — включать standalone TUN или v2rayN TUN.

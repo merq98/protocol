@@ -1,0 +1,6 @@
+# Replace relay.example.com with your subdomain.
+# DNS: A relay.example.com -> IP of VPS-2
+
+relay.example.com {
+    reverse_proxy 127.0.0.1:10080
+}

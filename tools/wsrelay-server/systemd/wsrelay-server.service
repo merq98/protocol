@@ -1,0 +1,15 @@
+[Unit]
+Description=REALITY WebSocket to TCP relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wsrelay-server -listen 127.0.0.1:10080 -origin 37.220.83.19:443 -path /ws
+Restart=always
+RestartSec=3
+User=root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

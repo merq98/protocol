@@ -64,12 +64,12 @@ WS_RELAY='wss://reality-relay.USER.workers.dev' sudo ./manage-clients.sh links
 
 ## 4. Проверка на Windows
 
-1. v2rayN **выключен** → примени пресет SOCKS (если нужно):
+1. v2rayN **выключен** → пропиши `wsRelay` в клиентский config:
    ```powershell
    cd C:\Users\Stas\Documents\Projects\protocol\REALITY
-   .\generate-v2rayn-tun-profile.ps1 -Preset socks-test
+   .\set-v2rayn-ws-relay.ps1 -WsRelayUrl "wss://reality-relay.USER.workers.dev" -ApplySafePreset
    ```
-2. Запусти v2rayN, выбери профиль **`*-cf`** / Cloudflare-ссылку.
+2. Запусти v2rayN, выбери профиль `laptop-direct`.
 3. Тест:
    ```powershell
    .\diagnose-v2rayn.ps1
