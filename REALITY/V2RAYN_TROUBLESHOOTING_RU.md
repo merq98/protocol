@@ -22,20 +22,30 @@ REALITY: received real certificate (potential MITM or redirection)
 
 ## Какой режим использовать сейчас
 
-Пока не использовать `VPN mode` / `TUN mode`.
+Сначала проверить **SOCKS без TUN**, потом включать TUN.
 
-Использовать только:
+Порядок:
 
-- активный сервер VLESS
-- режим маршрутизации `Global`
-- включенный `System Proxy`
+1. `socks-test` пресет (скрипт ниже) — TUN выкл, Global, Fragment выкл
+2. `curl --socks5 127.0.0.1:10808 https://api.ipify.org` → IP VPS
+3. Только после этого TUN: `tun-system` → `tun-gvisor` → `tun-relaxed`
 
-Не использовать одновременно:
+Не включать TUN, пока SOCKS даёт таймаут или `-1 ms` — иначе ошибки DNS/route маскируют проблему outbound.
 
-- `VPN mode`
-- `TUN mode`
+### Скрипты из репозитория
 
-Причина: в режиме `VPN mode` у тебя уже были ошибки DNS и таймауты, которые не относятся к серверу REALITY.
+```powershell
+cd C:\Users\Stas\Documents\Projects\protocol\REALITY
+
+# Диагностика (прогнать 3 раза: v2ray выкл / вкл без TUN / вкл с TUN)
+.\diagnose-v2rayn.ps1 -OutFile "$HOME\Desktop\v2rayn-diag.txt"
+
+# Пресеты (v2rayN полностью закрыт!)
+.\generate-v2rayn-tun-profile.ps1 -Preset socks-test
+.\generate-v2rayn-tun-profile.ps1 -Preset tun-system -FixSingboxUdp443
+```
+
+Подробнее: [TUN_DIAGNOSTICS.md](TUN_DIAGNOSTICS.md), Cloudflare relay: [DEPLOY_CF_RELAY_RU.md](DEPLOY_CF_RELAY_RU.md).
 
 ## Что нажать в v2rayN
 
@@ -254,7 +264,8 @@ accepted tcp:www.google.com:443 [socks -> proxy]
 - `Включить сниффинг` = `On`
 - в типе сниффинга оставить только `http` и `tls`
 - `Включить мультиплексирование Mux` = `Off`
-- `Включить фрагментацию (Fragment)` = `Off`
+- `Включить фрагментацию (Fragment)` = `Off` для базовой проверки; на текущем ПК именно без Fragment прошли SOCKS/HTTP тесты и VPS увидел `api.ipify.org`
+- `XUDP Proxy UDP 443` = `proxy` или `allow`, **не** `reject` (иначе YouTube/QUIC ломается)
 
 Остальное на этой вкладке не трогать.
 
@@ -334,6 +345,22 @@ dns: exchange failed
 
 1. сначала выставить DNS `1.1.1.1` и `8.8.8.8`
 2. если не помогло, сменить стек TUN
-3. если не помогло, временно выключить `Strict route`
+3. если не помогло, временно выключить `Strict route` (пресет `tun-relaxed`)
 
 Не менять всё сразу.
+
+## YouTube не открывается при рабочем IP VPS
+
+1. `XudpProxyUDP443` = `proxy` (скрипт `generate-v2rayn-tun-profile.ps1` ставит автоматически)
+2. Запустить с `-FixSingboxUdp443` — убирает `udp:443 -> reject` из sing-box `configPre.json`
+3. В Firefox: `network.http.http3.enabled` = `false`
+4. В Chrome: отключить QUIC в `chrome://flags`
+
+## Если direct-профиль нестабилен (-1 ms, timeout)
+
+Прямой REALITY на `37.220.83.19` режется провайдером. Используй Cloudflare WS relay:
+
+1. Деплой: [DEPLOY_CF_RELAY_RU.md](DEPLOY_CF_RELAY_RU.md)
+2. На VPS: `sudo ./set-ws-relay.sh set wss://....workers.dev`
+3. Импорт **Cloudflare:** ссылки из `WS_RELAY=... sudo ./manage-clients.sh links`
+4. После стабильного CF-профиля — включать TUN
