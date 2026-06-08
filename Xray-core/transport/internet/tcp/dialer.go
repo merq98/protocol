@@ -3,6 +3,8 @@ package tcp
 import (
 	"context"
 	gotls "crypto/tls"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -20,14 +22,19 @@ import (
 // Dial dials a new TCP connection to the given destination.
 func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
 	errors.LogInfo(ctx, "dialing TCP to ", dest)
+	wsRelayTrace("dial tcp dest=" + dest.String())
 
 	// If REALITY with wsRelay is configured, dial WebSocket instead of raw TCP.
+	// v2rayN regenerates config.json and drops unknown REALITY fields, so a
+	// sidecar file next to xray.exe is also supported for local client setups.
 	var conn net.Conn
 	var err error
-	if rConfig := reality.ConfigFromStreamSettings(streamSettings); rConfig != nil && rConfig.WsRelay != "" {
-		errors.LogInfo(ctx, "using WS relay: ", rConfig.WsRelay)
-		conn, err = goreality.DialWS(ctx, rConfig.WsRelay)
+	if relay := wsRelayFromStreamSettings(streamSettings); relay != "" {
+		errors.LogInfo(ctx, "using WS relay: ", relay)
+		wsRelayTrace("using relay=" + relay)
+		conn, err = goreality.DialWS(ctx, relay)
 	} else {
+		wsRelayTrace("no relay configured")
 		conn, err = internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
 	}
 	if err != nil {
@@ -124,6 +131,48 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 		conn = auth.Client(conn)
 	}
 	return stat.Connection(conn), nil
+}
+
+func wsRelayFromStreamSettings(streamSettings *internet.MemoryStreamConfig) string {
+	if rConfig := reality.ConfigFromStreamSettings(streamSettings); rConfig != nil {
+		if relay := strings.TrimSpace(rConfig.WsRelay); relay != "" {
+			wsRelayTrace("relay from config")
+			return relay
+		}
+	}
+	if relay := strings.TrimSpace(os.Getenv("XRAY_WS_RELAY")); relay != "" {
+		wsRelayTrace("relay from env")
+		return relay
+	}
+	for _, path := range wsRelaySidecarPaths() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			wsRelayTrace("sidecar miss " + path + ": " + err.Error())
+			continue
+		}
+		if relay := strings.TrimSpace(string(data)); relay != "" {
+			wsRelayTrace("relay from sidecar " + path)
+			return relay
+		}
+		wsRelayTrace("sidecar empty " + path)
+	}
+	return ""
+}
+
+func wsRelaySidecarPaths() []string {
+	paths := []string{"wsrelay.txt"}
+	if exePath, err := os.Executable(); err == nil {
+		paths = append([]string{filepath.Join(filepath.Dir(exePath), "wsrelay.txt")}, paths...)
+	}
+	return paths
+}
+
+func wsRelayTrace(message string) {
+	path := "wsrelay-debug.log"
+	if exePath, err := os.Executable(); err == nil {
+		path = filepath.Join(filepath.Dir(exePath), "wsrelay-debug.log")
+	}
+	_ = os.WriteFile(path, []byte(message+"\n"), 0644)
 }
 
 func init() {
