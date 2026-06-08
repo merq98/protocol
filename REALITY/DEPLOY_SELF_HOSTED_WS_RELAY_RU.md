@@ -124,21 +124,21 @@ sudo ./deploy-wsrelay-vps.sh uninstall
 
 `REALITY/set-ws-relay.sh` пишет `wsRelay` в **серверный** config. Для self-hosted relay поле должно быть в **клиентском** `binConfigs/config.json` — для этого есть `set-v2rayn-ws-relay.ps1`.
 
-## 7. iOS / Happ Plus
+## 7. Universal Gateway Для Windows И iOS
 
 Этот `/ws` режим рассчитан на **Windows** с кастомным `xray.exe` и `wsrelay.txt`.
 
-Для телефонов используй отдельный mobile gateway на том же VPS-2:
+Для новых подключений используй universal gateway на том же VPS-2:
 
 - [DEPLOY_MOBILE_GATEWAY_RU.md](DEPLOY_MOBILE_GATEWAY_RU.md)
-- путь: `https://<domain>/mobile`
-- Windows `/ws` при этом можно не трогать
+- путь: `https://<domain>/universal`
+- Windows `/ws` при этом можно оставить как fallback
 
 ## 8. Файлы в репозитории
 
 - `tools/wsrelay-server/main.go` — relay binary
 - `REALITY/deploy-wsrelay-vps.sh` — установка на VPS-2
-- `REALITY/deploy-mobile-gateway-vps.sh` — mobile gateway для iOS/Happ Plus
+- `REALITY/deploy-mobile-gateway-vps.sh` — universal gateway для Windows/iOS
 - `REALITY/set-v2rayn-ws-relay.ps1` — патч клиентского v2rayN config
 - `tools/wsrelay-server/caddy/Caddyfile.example` — пример Caddy
 - `tools/wsrelay-server/systemd/wsrelay-server.service` — пример systemd unit

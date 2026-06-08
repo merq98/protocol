@@ -373,11 +373,11 @@ dns: exchange failed
 
 После стабильного SOCKS через relay — включать standalone TUN или v2rayN TUN.
 
-**Вариант C — iOS / Happ Plus через VPS-2 mobile gateway:**
+**Вариант C — universal gateway для Windows v2rayN и iOS / Happ Plus:**
 
 1. Деплой: [DEPLOY_MOBILE_GATEWAY_RU.md](DEPLOY_MOBILE_GATEWAY_RU.md)
 2. VPS-2: `sudo ./deploy-mobile-gateway-vps.sh install ...`
-3. VPS-2: `sudo ./manage-mobile-clients.sh add iphone-stas`
-4. Импортировать выданную `vless://...type=ws&security=tls&path=%2Fmobile` ссылку в Happ Plus
+3. VPS-2: `sudo ./manage-mobile-clients.sh add windows-stas` или `sudo ./manage-mobile-clients.sh add iphone-stas`
+4. Импортировать выданную `vless://...type=ws&security=tls&path=%2Funiversal` ссылку в v2rayN или Happ Plus
 
-Windows `/ws` relay остаётся отдельным режимом и не заменяется mobile gateway.
+Windows `/ws` relay остаётся legacy fallback и не заменяет universal gateway.

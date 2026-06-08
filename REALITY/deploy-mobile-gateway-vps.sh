@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# deploy-mobile-gateway-vps.sh — Install Xray mobile gateway on VPS-2.
+# deploy-mobile-gateway-vps.sh — Install Xray universal gateway on VPS-2.
 #
-# Mobile clients (Happ Plus / iOS) connect with standard VLESS+WS+TLS to VPS-2.
+# Clients (Windows v2rayN / Happ Plus / iOS) connect with standard VLESS+WS+TLS to VPS-2.
 # VPS-2 forwards traffic to VPS-1 through VLESS+REALITY using one upstream UUID.
 #
 # Prerequisites:
 #   - Ubuntu/Debian VPS-2 with Caddy TLS for the domain
 #   - Existing wsrelay-server on /ws is optional but supported side-by-side
-#   - Upstream client UUID created on VPS-1 (e.g. mobile-gateway)
+#   - Upstream client UUID created on VPS-1 (e.g. universal-gateway)
 #
 # Usage:
 #   sudo ./deploy-mobile-gateway-vps.sh install \
 #     --domain mythicquality.com \
-#     --path /mobile \
+#     --path /universal \
 #     --origin 37.220.83.19:443 \
 #     --upstream-uuid '<UUID_FROM_VPS1>' \
 #     --server-name '<REALITY_SNI>' \
@@ -37,9 +37,10 @@ SERVICE_NAME="${SERVICE_NAME:-xray-mobile-gateway}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 CADDY_FILE="${CADDY_FILE:-/etc/caddy/Caddyfile}"
 WSRELAY_LISTEN="${WSRELAY_LISTEN:-127.0.0.1:10080}"
+XRAY_API_LISTEN="${XRAY_API_LISTEN:-127.0.0.1:10086}"
 
 DOMAIN=""
-MOBILE_PATH="/mobile"
+MOBILE_PATH="/universal"
 LISTEN="127.0.0.1:10081"
 ORIGIN="37.220.83.19:443"
 UPSTREAM_UUID=""
@@ -72,7 +73,7 @@ parse_args() {
 
 normalize_mobile_path() {
   if [[ -z "$MOBILE_PATH" ]]; then
-    MOBILE_PATH="/mobile"
+    MOBILE_PATH="/universal"
   fi
   if [[ "$MOBILE_PATH" != /* ]]; then
     MOBILE_PATH="/$MOBILE_PATH"
@@ -130,7 +131,7 @@ install_xray() {
 
 preserve_existing_clients() {
   if [[ -f "$CONFIG_FILE" ]]; then
-    jq -c '.inbounds[0].settings.clients // []' "$CONFIG_FILE"
+    jq -c '[.inbounds[]? | select(.tag == "mobile-in")][0].settings.clients // []' "$CONFIG_FILE"
     return
   fi
   printf '[]'
@@ -143,6 +144,7 @@ DOMAIN=$DOMAIN
 MOBILE_PATH=$MOBILE_PATH
 MOBILE_LISTEN=$LISTEN
 ORIGIN=$ORIGIN
+XRAY_API=$XRAY_API_LISTEN
 EOF
   chmod 0644 "$GATEWAY_ENV"
   touch "$LABELS_FILE"
@@ -157,6 +159,8 @@ write_xray_config() {
   jq -n \
     --arg listen_host "${LISTEN%:*}" \
     --argjson listen_port "${LISTEN##*:}" \
+    --arg api_host "${XRAY_API_LISTEN%:*}" \
+    --argjson api_port "${XRAY_API_LISTEN##*:}" \
     --arg mobile_path "$MOBILE_PATH" \
     --argjson clients "$clients_json" \
     --arg origin_host "$ORIGIN_HOST" \
@@ -167,7 +171,35 @@ write_xray_config() {
     --arg short_id "$SHORT_ID" \
     '{
       log: { loglevel: "warning" },
+      api: {
+        tag: "api",
+        services: ["StatsService"]
+      },
+      stats: {},
+      policy: {
+        levels: {
+          "0": {
+            statsUserUplink: true,
+            statsUserDownlink: true
+          }
+        },
+        system: {
+          statsInboundUplink: true,
+          statsInboundDownlink: true,
+          statsOutboundUplink: true,
+          statsOutboundDownlink: true
+        }
+      },
       inbounds: [
+        {
+          listen: $api_host,
+          port: $api_port,
+          protocol: "dokodemo-door",
+          tag: "api",
+          settings: {
+            address: $api_host
+          }
+        },
         {
           listen: $listen_host,
           port: $listen_port,
@@ -228,6 +260,11 @@ write_xray_config() {
         rules: [
           {
             type: "field",
+            inboundTag: ["api"],
+            outboundTag: "api"
+          },
+          {
+            type: "field",
             inboundTag: ["mobile-in"],
             outboundTag: "proxy"
           }
@@ -243,7 +280,7 @@ write_xray_config() {
 write_systemd_unit() {
   cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=Xray Mobile Gateway (VPS-2)
+Description=Xray Universal Gateway (VPS-2)
 After=network-online.target
 Wants=network-online.target
 
@@ -270,18 +307,13 @@ update_caddy_routes() {
 
   python3 - "$CADDY_FILE" "$DOMAIN" "$MOBILE_PATH" "$LISTEN" "$WSRELAY_LISTEN" <<'PY'
 import pathlib
-import re
 import sys
 
 caddy_file, domain, mobile_path, mobile_listen, wsrelay_listen = sys.argv[1:6]
 path = pathlib.Path(caddy_file)
 text = path.read_text(encoding="utf-8")
 
-if f"handle {mobile_path}" in text:
-    print(f"Caddy route already contains {mobile_path}")
-    sys.exit(0)
-
-mobile_block = f"""{domain} {{
+site_block = f"""{domain} {{
     handle {mobile_path}* {{
         reverse_proxy {mobile_listen}
     }}
@@ -293,11 +325,31 @@ mobile_block = f"""{domain} {{
     }}
 }}"""
 
-pattern = rf"{re.escape(domain)}\s*\{{.*?\n\}}"
-if re.search(pattern, text, flags=re.DOTALL):
-    text = re.sub(pattern, mobile_block, text, count=1, flags=re.DOTALL)
+def find_site_block(source, site):
+    marker = f"{site} {{"
+    start = source.find(marker)
+    if start == -1:
+        return None
+    brace = source.find("{", start)
+    if brace == -1:
+        return None
+    depth = 0
+    for index in range(brace, len(source)):
+        char = source[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return start, index + 1
+    raise SystemExit(f"Malformed Caddyfile: unclosed site block for {site}")
+
+block_range = find_site_block(text, domain)
+if block_range:
+    start, end = block_range
+    text = text[:start].rstrip() + "\n\n" + site_block + "\n" + text[end:].lstrip()
 else:
-    text = text.rstrip() + "\n\n" + mobile_block + "\n"
+    text = text.rstrip() + "\n\n" + site_block + "\n"
 
 path.write_text(text, encoding="utf-8")
 print(f"Updated Caddy site block for {domain}")
@@ -328,11 +380,13 @@ cmd_install() {
   write_systemd_unit
   update_caddy_routes
 
-  log "Mobile gateway installed"
+  log "Universal gateway installed"
   printf '\nNext:\n'
+  printf '  sudo %s/manage-mobile-clients.sh add windows-stas\n' "$SCRIPT_DIR"
   printf '  sudo %s/manage-mobile-clients.sh add iphone-stas\n' "$SCRIPT_DIR"
   printf '\nCheck:\n'
   printf '  curl -I https://%s%s\n' "$DOMAIN" "$MOBILE_PATH"
+  printf '  sudo %s/check-universal-traffic.sh status\n' "$SCRIPT_DIR"
   printf '  sudo systemctl status %s --no-pager\n' "$SERVICE_NAME"
 }
 
@@ -340,7 +394,7 @@ cmd_status() {
   systemctl status "$SERVICE_NAME" --no-pager || true
   systemctl status wsrelay-server --no-pager || true
   systemctl status caddy --no-pager || true
-  ss -lntp | grep -E '(:443|:10080|:10081)' || true
+  ss -lntp | grep -E '(:443|:10080|:10081|:10086)' || true
   if [[ -f "$CONFIG_FILE" ]]; then
     "$XRAY_BIN" run -test -config "$CONFIG_FILE" || true
   fi
@@ -364,7 +418,7 @@ case "${1:-}" in
 Usage:
   sudo $0 install \\
     --domain mythicquality.com \\
-    --path /mobile \\
+    --path /universal \\
     --origin 37.220.83.19:443 \\
     --upstream-uuid '<UUID_FROM_VPS1>' \\
     --server-name '<REALITY_SNI>' \\

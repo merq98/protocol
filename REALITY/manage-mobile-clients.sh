@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# manage-mobile-clients.sh — Add/remove/list mobile clients on VPS-2 gateway.
+# manage-mobile-clients.sh — Add/remove/list universal clients on VPS-2 gateway.
 #
 # Usage:
 #   ./manage-mobile-clients.sh list
@@ -20,7 +20,7 @@ LABELS_FILE="${LABELS_FILE:-/usr/local/etc/xray-mobile/client-labels.txt}"
 SERVICE_NAME="${SERVICE_NAME:-xray-mobile-gateway}"
 
 DOMAIN=""
-MOBILE_PATH="/mobile"
+MOBILE_PATH="/universal"
 
 die()  { printf 'Error: %s\n' "$1" >&2; exit 1; }
 log()  { printf '==> %s\n' "$1"; }
@@ -34,7 +34,7 @@ load_gateway_env() {
   # shellcheck disable=SC1090
   source "$GATEWAY_ENV"
   DOMAIN="${DOMAIN:-}"
-  MOBILE_PATH="${MOBILE_PATH:-/mobile}"
+  MOBILE_PATH="${MOBILE_PATH:-/universal}"
   [[ -n "$DOMAIN" ]] || die "DOMAIN missing in $GATEWAY_ENV"
 }
 
@@ -63,8 +63,8 @@ make_mobile_vless_link() {
   local uuid="$1" label="$2"
   local encoded_path tag
   encoded_path="$(urlencode_path "$MOBILE_PATH")"
-  tag="${label:-mobile}"
-  printf 'vless://%s@%s:443?encryption=none&type=ws&security=tls&host=%s&sni=%s&path=%s#%s-mobile' \
+  tag="${label:-universal}"
+  printf 'vless://%s@%s:443?encryption=none&type=ws&security=tls&host=%s&sni=%s&path=%s#%s-universal' \
     "$uuid" "$DOMAIN" "$DOMAIN" "$DOMAIN" "$encoded_path" "$tag"
 }
 
@@ -76,7 +76,7 @@ restart_gateway() {
 cmd_list() {
   local idx count
   idx="$(require_mobile_inbound)"
-  log "Mobile clients in $CONFIG_FILE:"
+  log "Universal clients in $CONFIG_FILE:"
   count="$(jq --argjson idx "$idx" '.inbounds[$idx].settings.clients // [] | length' "$CONFIG_FILE")"
   for (( i=0; i<count; i++ )); do
     local uuid email
@@ -112,7 +112,7 @@ cmd_add() {
   [[ -z "$existing" ]] || die "UUID $uuid already exists in config"
 
   local email="${label:-${uuid:0:8}}"
-  log "Adding mobile client: $uuid"
+  log "Adding universal client: $uuid"
 
   local tmp
   tmp="$(mktemp)"
@@ -132,7 +132,7 @@ cmd_add() {
   "$XRAY_BIN" run -test -config "$CONFIG_FILE" || die "Config validation failed"
   restart_gateway
 
-  printf '\n--- Happ Plus / iOS link ---\n'
+  printf '\n--- Universal VLESS WS TLS link ---\n'
   printf '%s\n' "$(make_mobile_vless_link "$uuid" "$label")"
 }
 
@@ -149,7 +149,7 @@ cmd_remove() {
   ' "$CONFIG_FILE")"
   [[ -n "$existing" ]] || die "UUID $uuid not found in config"
 
-  log "Removing mobile client: $uuid"
+  log "Removing universal client: $uuid"
   local tmp
   tmp="$(mktemp)"
   jq --argjson idx "$idx" --arg uuid "$uuid" '
@@ -164,7 +164,7 @@ cmd_remove() {
 
   "$XRAY_BIN" run -test -config "$CONFIG_FILE" || die "Config validation failed"
   restart_gateway
-  log "Mobile client removed"
+  log "Universal client removed"
 }
 
 cmd_links() {
@@ -185,7 +185,7 @@ cmd_links() {
   done
   printf '\nTotal: %d client(s)\n' "$count"
   printf 'Gateway domain: %s\n' "$DOMAIN"
-  printf 'Mobile path:    %s\n' "$MOBILE_PATH"
+  printf 'Universal path: %s\n' "$MOBILE_PATH"
 }
 
 case "${1:-}" in
