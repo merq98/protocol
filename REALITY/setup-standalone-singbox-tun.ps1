@@ -21,6 +21,7 @@ param(
     [string]$InstallDir = "$env:USERPROFILE\Documents\v2rayN-windows-64\standalone-singbox-tun",
     [int]$UpstreamSocksPort = 10808,
     [string]$VpsIp = "37.220.83.19",
+    [string]$RelayIp = "193.22.244.37",
     [string]$SingBoxExe = "",
     [ValidateSet("system", "gvisor", "mixed")]
     [string]$Stack = "system",
@@ -158,6 +159,17 @@ function Download-SingBox([string]$TargetDir) {
 }
 
 function New-Config([string]$ConfigPath) {
+    $directCidrs = @("$VpsIp/32")
+    if ($RelayIp -and $RelayIp -ne $VpsIp) {
+        $directCidrs += "$RelayIp/32"
+    }
+    $routeExcludeCidrs = @($directCidrs + @(
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16"
+    ))
+
     $config = [ordered]@{
         log = [ordered]@{
             level = "info"
@@ -199,13 +211,7 @@ function New-Config([string]$ConfigPath) {
                 auto_route = $true
                 strict_route = $StrictRoute
                 stack = $Stack
-                route_exclude_address = @(
-                    "$VpsIp/32",
-                    "127.0.0.0/8",
-                    "10.0.0.0/8",
-                    "172.16.0.0/12",
-                    "192.168.0.0/16"
-                )
+                route_exclude_address = $routeExcludeCidrs
             }
         )
         outbounds = @(
@@ -248,7 +254,7 @@ function New-Config([string]$ConfigPath) {
                     outbound = "direct"
                 },
                 [ordered]@{
-                    ip_cidr = @("$VpsIp/32")
+                    ip_cidr = @($directCidrs)
                     outbound = "direct"
                 },
                 [ordered]@{
