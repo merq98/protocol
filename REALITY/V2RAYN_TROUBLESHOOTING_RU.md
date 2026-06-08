@@ -372,3 +372,12 @@ dns: exchange failed
 3. Windows: `.\set-v2rayn-ws-relay.ps1 -WsRelayUrl "wss://relay.<domain>/ws" -ApplySafePreset`
 
 После стабильного SOCKS через relay — включать standalone TUN или v2rayN TUN.
+
+**Вариант C — iOS / Happ Plus через VPS-2 mobile gateway:**
+
+1. Деплой: [DEPLOY_MOBILE_GATEWAY_RU.md](DEPLOY_MOBILE_GATEWAY_RU.md)
+2. VPS-2: `sudo ./deploy-mobile-gateway-vps.sh install ...`
+3. VPS-2: `sudo ./manage-mobile-clients.sh add iphone-stas`
+4. Импортировать выданную `vless://...type=ws&security=tls&path=%2Fmobile` ссылку в Happ Plus
+
+Windows `/ws` relay остаётся отдельным режимом и не заменяется mobile gateway.
