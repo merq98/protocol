@@ -142,9 +142,8 @@ generate_mtproto_secret() {
   mkdir -p "$MTPROTO_CONFIG_DIR"
   chmod 0700 "$MTPROTO_CONFIG_DIR"
 
-  if [[ -f "$MTPROTO_ENV_FILE" ]]; then
-    # shellcheck disable=SC1090
-    source "$MTPROTO_ENV_FILE"
+  if [[ -z "${MTPROTO_SECRET:-}" && -f "$MTPROTO_ENV_FILE" ]]; then
+    MTPROTO_SECRET="$(sed -n "s/^MTPROTO_SECRET='\([^']*\)'.*/\1/p" "$MTPROTO_ENV_FILE" | head -n 1)"
   fi
 
   if [[ -z "${MTPROTO_SECRET:-}" ]]; then
