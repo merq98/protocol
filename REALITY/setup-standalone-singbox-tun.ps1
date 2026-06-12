@@ -188,7 +188,6 @@ function New-Config([string]$ConfigPath) {
                     tag = "local"
                     type = "udp"
                     server = "223.5.5.5"
-                    detour = "direct"
                 }
             )
             rules = @(
@@ -281,8 +280,8 @@ if (-not `$isAdmin) {
     Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File ```"`$PSCommandPath```""
     exit
 }
-Set-Location "$TargetDir"
-& "$SingBoxExe" run -c "$ConfigPath"
+Set-Location `$PSScriptRoot
+& (Join-Path `$PSScriptRoot "sing-box.exe") run -c (Join-Path `$PSScriptRoot "config.json")
 "@ | ForEach-Object { Write-Utf8NoBom $startPath $_ }
 
     @"
