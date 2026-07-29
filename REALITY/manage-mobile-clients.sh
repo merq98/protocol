@@ -20,7 +20,10 @@ LABELS_FILE="${LABELS_FILE:-/usr/local/etc/xray-mobile/client-labels.txt}"
 SERVICE_NAME="${SERVICE_NAME:-xray-mobile-gateway}"
 
 DOMAIN=""
+PUBLIC_ADDRESS=""
 MOBILE_PATH="/universal"
+PUBLIC_PORT="443"
+TLS_PINNED_PEER_CERT_SHA256=""
 
 die()  { printf 'Error: %s\n' "$1" >&2; exit 1; }
 log()  { printf '==> %s\n' "$1"; }
@@ -34,8 +37,14 @@ load_gateway_env() {
   # shellcheck disable=SC1090
   source "$GATEWAY_ENV"
   DOMAIN="${DOMAIN:-}"
+  PUBLIC_ADDRESS="${PUBLIC_ADDRESS:-$DOMAIN}"
   MOBILE_PATH="${MOBILE_PATH:-/universal}"
+  PUBLIC_PORT="${PUBLIC_PORT:-443}"
+  TLS_PINNED_PEER_CERT_SHA256="${TLS_PINNED_PEER_CERT_SHA256:-}"
   [[ -n "$DOMAIN" ]] || die "DOMAIN missing in $GATEWAY_ENV"
+  if [[ -n "$TLS_PINNED_PEER_CERT_SHA256" && ! "$TLS_PINNED_PEER_CERT_SHA256" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+    die "TLS_PINNED_PEER_CERT_SHA256 must be a 64-character SHA-256 hex string"
+  fi
 }
 
 require_config() {
@@ -61,11 +70,15 @@ urlencode_path() {
 
 make_mobile_vless_link() {
   local uuid="$1" label="$2"
-  local encoded_path tag
+  local encoded_path pcs_query tag
   encoded_path="$(urlencode_path "$MOBILE_PATH")"
+  pcs_query=""
+  if [[ -n "$TLS_PINNED_PEER_CERT_SHA256" ]]; then
+    pcs_query="&pcs=${TLS_PINNED_PEER_CERT_SHA256}"
+  fi
   tag="${label:-universal}"
-  printf 'vless://%s@%s:443?encryption=none&type=ws&security=tls&host=%s&sni=%s&path=%s#%s-universal' \
-    "$uuid" "$DOMAIN" "$DOMAIN" "$DOMAIN" "$encoded_path" "$tag"
+  printf 'vless://%s@%s:%s?encryption=none&type=ws&security=tls&host=%s&sni=%s&path=%s%s#%s-universal' \
+    "$uuid" "$PUBLIC_ADDRESS" "$PUBLIC_PORT" "$DOMAIN" "$DOMAIN" "$encoded_path" "$pcs_query" "$tag"
 }
 
 restart_gateway() {

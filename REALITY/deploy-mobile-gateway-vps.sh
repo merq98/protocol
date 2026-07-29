@@ -12,6 +12,9 @@
 # Usage:
 #   sudo ./deploy-mobile-gateway-vps.sh install \
 #     --domain mythicquality.com \
+#     --public-address 89.208.113.41 \
+#     --public-port 9443 \
+#     --tls-pin-sha256 '<TLS_CA_SHA256>' \
 #     --path /universal \
 #     --origin 37.220.83.19:443 \
 #     --upstream-uuid '<UUID_FROM_VPS1>' \
@@ -40,6 +43,9 @@ WSRELAY_LISTEN="${WSRELAY_LISTEN:-127.0.0.1:10080}"
 XRAY_API_LISTEN="${XRAY_API_LISTEN:-127.0.0.1:10086}"
 
 DOMAIN=""
+PUBLIC_ADDRESS=""
+PUBLIC_PORT="443"
+TLS_PINNED_PEER_CERT_SHA256=""
 MOBILE_PATH="/universal"
 LISTEN="127.0.0.1:10081"
 ORIGIN="37.220.83.19:443"
@@ -59,6 +65,9 @@ parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --domain)        DOMAIN="${2:-}"; shift 2 ;;
+      --public-address) PUBLIC_ADDRESS="${2:-}"; shift 2 ;;
+      --public-port)   PUBLIC_PORT="${2:-}"; shift 2 ;;
+      --tls-pin-sha256) TLS_PINNED_PEER_CERT_SHA256="${2:-}"; shift 2 ;;
       --path)          MOBILE_PATH="${2:-}"; shift 2 ;;
       --listen)        LISTEN="${2:-}"; shift 2 ;;
       --origin)        ORIGIN="${2:-}"; shift 2 ;;
@@ -82,11 +91,17 @@ normalize_mobile_path() {
 
 validate_install_args() {
   [[ -n "$DOMAIN" ]] || die "--domain is required"
+  PUBLIC_ADDRESS="${PUBLIC_ADDRESS:-$DOMAIN}"
   [[ -n "$UPSTREAM_UUID" ]] || die "--upstream-uuid is required"
   [[ -n "$SERVER_NAME" ]] || die "--server-name is required"
   [[ -n "$PUBLIC_KEY" ]] || die "--public-key is required"
   [[ -n "$SHORT_ID" ]] || die "--short-id is required"
   [[ "$ORIGIN" == *:* ]] || die "--origin must be host:port"
+  [[ "$PUBLIC_PORT" =~ ^[0-9]+$ ]] && (( PUBLIC_PORT >= 1 && PUBLIC_PORT <= 65535 )) \
+    || die "--public-port must be an integer from 1 to 65535"
+  if [[ -n "$TLS_PINNED_PEER_CERT_SHA256" && ! "$TLS_PINNED_PEER_CERT_SHA256" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+    die "--tls-pin-sha256 must be a 64-character SHA-256 hex string"
+  fi
 }
 
 split_origin() {
@@ -141,6 +156,9 @@ write_gateway_env() {
   mkdir -p "$CONFIG_DIR"
   cat > "$GATEWAY_ENV" <<EOF
 DOMAIN=$DOMAIN
+PUBLIC_ADDRESS=$PUBLIC_ADDRESS
+PUBLIC_PORT=$PUBLIC_PORT
+TLS_PINNED_PEER_CERT_SHA256=$TLS_PINNED_PEER_CERT_SHA256
 MOBILE_PATH=$MOBILE_PATH
 MOBILE_LISTEN=$LISTEN
 ORIGIN=$ORIGIN
@@ -305,15 +323,16 @@ update_caddy_routes() {
   command -v caddy >/dev/null 2>&1 || die "Caddy is not installed. Install wsrelay first or install Caddy manually."
   [[ -f "$CADDY_FILE" ]] || die "Caddyfile not found: $CADDY_FILE"
 
-  python3 - "$CADDY_FILE" "$DOMAIN" "$MOBILE_PATH" "$LISTEN" "$WSRELAY_LISTEN" <<'PY'
+  python3 - "$CADDY_FILE" "$DOMAIN" "$PUBLIC_PORT" "$MOBILE_PATH" "$LISTEN" "$WSRELAY_LISTEN" <<'PY'
 import pathlib
 import sys
 
-caddy_file, domain, mobile_path, mobile_listen, wsrelay_listen = sys.argv[1:6]
+caddy_file, domain, public_port, mobile_path, mobile_listen, wsrelay_listen = sys.argv[1:7]
 path = pathlib.Path(caddy_file)
 text = path.read_text(encoding="utf-8")
+site = domain if public_port == "443" else f"https://{domain}:{public_port}"
 
-site_block = f"""{domain} {{
+site_block = f"""{site} {{
     handle {mobile_path}* {{
         reverse_proxy {mobile_listen}
     }}
@@ -344,7 +363,7 @@ def find_site_block(source, site):
                 return start, index + 1
     raise SystemExit(f"Malformed Caddyfile: unclosed site block for {site}")
 
-block_range = find_site_block(text, domain)
+block_range = find_site_block(text, site)
 if block_range:
     start, end = block_range
     text = text[:start].rstrip() + "\n\n" + site_block + "\n" + text[end:].lstrip()
@@ -352,7 +371,7 @@ else:
     text = text.rstrip() + "\n\n" + site_block + "\n"
 
 path.write_text(text, encoding="utf-8")
-print(f"Updated Caddy site block for {domain}")
+print(f"Updated Caddy site block for {site}")
 PY
 
   systemctl enable --now caddy
@@ -385,7 +404,7 @@ cmd_install() {
   printf '  sudo %s/manage-mobile-clients.sh add windows-stas\n' "$SCRIPT_DIR"
   printf '  sudo %s/manage-mobile-clients.sh add iphone-stas\n' "$SCRIPT_DIR"
   printf '\nCheck:\n'
-  printf '  curl -I https://%s%s\n' "$DOMAIN" "$MOBILE_PATH"
+  printf '  curl -I https://%s:%s%s\n' "$DOMAIN" "$PUBLIC_PORT" "$MOBILE_PATH"
   printf '  sudo %s/check-universal-traffic.sh status\n' "$SCRIPT_DIR"
   printf '  sudo systemctl status %s --no-pager\n' "$SERVICE_NAME"
 }
@@ -418,6 +437,9 @@ case "${1:-}" in
 Usage:
   sudo $0 install \\
     --domain mythicquality.com \\
+    --public-address 89.208.113.41 \\
+    --public-port 9443 \\
+    --tls-pin-sha256 '<TLS_CA_SHA256>' \\
     --path /universal \\
     --origin 37.220.83.19:443 \\
     --upstream-uuid '<UUID_FROM_VPS1>' \\

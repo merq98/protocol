@@ -9,7 +9,7 @@
 ```text
 Windows v2rayN / iOS Happ Plus
   -> VLESS + WebSocket + TLS
-  -> https://mythicquality.com/universal
+  -> https://mythicquality.com:9443/universal
 VPS-2 (Caddy TLS + Xray universal inbound)
   -> VLESS + REALITY
   -> 37.220.83.19:443
@@ -69,6 +69,9 @@ chmod +x deploy-mobile-gateway-vps.sh manage-mobile-clients.sh check-universal-t
 
 sudo ./deploy-mobile-gateway-vps.sh install \
   --domain mythicquality.com \
+  --public-address 89.208.113.41 \
+  --public-port 9443 \
+  --tls-pin-sha256 '<TLS_CA_SHA256>' \
   --path /universal \
   --origin 37.220.83.19:443 \
   --upstream-uuid '<UUID_FROM_VPS1>' \
@@ -98,7 +101,7 @@ sudo ./manage-mobile-clients.sh add iphone-stas
 Пример ссылки:
 
 ```text
-vless://<CLIENT_UUID>@mythicquality.com:443?encryption=none&type=ws&security=tls&host=mythicquality.com&sni=mythicquality.com&path=%2Funiversal#client-universal
+vless://<CLIENT_UUID>@89.208.113.41:9443?encryption=none&type=ws&security=tls&host=mythicquality.com&sni=mythicquality.com&path=%2Funiversal&pcs=<TLS_CA_SHA256>#client-universal
 ```
 
 Импортируй ссылку в Happ Plus или v2rayN.
@@ -112,7 +115,7 @@ sudo ./deploy-mobile-gateway-vps.sh status
 sudo journalctl -u xray-mobile-gateway -n 100 --no-pager
 sudo journalctl -u wsrelay-server -n 50 --no-pager
 sudo ./check-universal-traffic.sh status
-curl -I https://mythicquality.com/universal
+curl -I https://mythicquality.com:9443/universal
 ```
 
 На VPS-1 после подключения клиента:

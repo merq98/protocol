@@ -21,7 +21,7 @@ param(
     [string]$InstallDir = "$env:USERPROFILE\Documents\v2rayN-windows-64\standalone-singbox-tun",
     [int]$UpstreamSocksPort = 10808,
     [string]$VpsIp = "37.220.83.19",
-    [string]$RelayIp = "193.22.244.37",
+    [string]$RelayIp = "89.208.113.41",
     [string]$SingBoxExe = "",
     [ValidateSet("system", "gvisor", "mixed")]
     [string]$Stack = "system",
