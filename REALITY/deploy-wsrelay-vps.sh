@@ -113,7 +113,15 @@ install_caddy() {
     log "Writing Caddy site block for $DOMAIN"
     {
       printf '\n%s {\n' "$DOMAIN"
-      printf '    reverse_proxy %s\n' "$LISTEN"
+      printf '    reverse_proxy %s {\n' "$LISTEN"
+      printf '        flush_interval -1\n'
+      printf '        transport http {\n'
+      printf '            versions 1.1\n'
+      printf '            read_timeout 0\n'
+      printf '            write_timeout 0\n'
+      printf '            dial_timeout 10s\n'
+      printf '        }\n'
+      printf '    }\n'
       printf '}\n'
     } >> "$CADDY_FILE"
   fi

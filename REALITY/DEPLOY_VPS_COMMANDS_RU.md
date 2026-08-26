@@ -235,12 +235,7 @@ sudo tee "$XRAY_CONFIG_FILE" > /dev/null <<EOF
         }
       },
       "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
+        "enabled": false
       }
     }
   ],

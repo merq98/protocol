@@ -32,6 +32,13 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run with sudo"
 }
 
+install_gateway_config() {
+  local tmp="$1"
+  "$XRAY_BIN" run -test -config "$tmp" || { rm -f "$tmp"; die "Config validation failed"; }
+  install -m 0644 "$tmp" "$CONFIG_FILE"
+  rm -f "$tmp"
+}
+
 load_gateway_env() {
   [[ -f "$GATEWAY_ENV" ]] || die "Gateway env not found: $GATEWAY_ENV (run deploy-mobile-gateway-vps.sh install first)"
   # shellcheck disable=SC1090
@@ -125,24 +132,29 @@ cmd_add() {
   [[ -z "$existing" ]] || die "UUID $uuid already exists in config"
 
   local email="${label:-${uuid:0:8}}"
+  local email_exists
+  email_exists="$(jq -r --argjson idx "$idx" --arg email "$email" '
+    .inbounds[$idx].settings.clients // []
+    | map(select(.email == $email)) | .[0].email // empty
+  ' "$CONFIG_FILE")"
+  [[ -z "$email_exists" ]] || die "Email '$email' already exists. Use a unique label (Xray rejects duplicate emails)."
+
   log "Adding universal client: $uuid"
 
   local tmp
-  tmp="$(mktemp)"
+  tmp="$(mktemp --suffix=.json)"
   jq --argjson idx "$idx" --arg uuid "$uuid" --arg email "$email" '
     .inbounds[$idx].settings.clients = ((.inbounds[$idx].settings.clients // []) + [{
       "id": $uuid,
       "email": $email
     }])
   ' "$CONFIG_FILE" > "$tmp"
-  mv "$tmp" "$CONFIG_FILE"
-  chmod 0644 "$CONFIG_FILE"
+  install_gateway_config "$tmp"
 
   if [[ -n "$label" ]]; then
     echo "${uuid}=${label}" >> "$LABELS_FILE"
   fi
 
-  "$XRAY_BIN" run -test -config "$CONFIG_FILE" || die "Config validation failed"
   restart_gateway
 
   printf '\n--- Universal VLESS WS TLS link ---\n'
@@ -164,18 +176,16 @@ cmd_remove() {
 
   log "Removing universal client: $uuid"
   local tmp
-  tmp="$(mktemp)"
+  tmp="$(mktemp --suffix=.json)"
   jq --argjson idx "$idx" --arg uuid "$uuid" '
     .inbounds[$idx].settings.clients |= map(select(.id != $uuid))
   ' "$CONFIG_FILE" > "$tmp"
-  mv "$tmp" "$CONFIG_FILE"
-  chmod 0644 "$CONFIG_FILE"
+  install_gateway_config "$tmp"
 
   if [[ -f "$LABELS_FILE" ]]; then
     sed -i "/^${uuid}=/d" "$LABELS_FILE"
   fi
 
-  "$XRAY_BIN" run -test -config "$CONFIG_FILE" || die "Config validation failed"
   restart_gateway
   log "Universal client removed"
 }

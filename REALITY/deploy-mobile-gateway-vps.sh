@@ -4,6 +4,12 @@
 # Clients (Windows v2rayN / Happ Plus / iOS) connect with standard VLESS+WS+TLS to VPS-2.
 # VPS-2 forwards traffic to VPS-1 through VLESS+REALITY using one upstream UUID.
 #
+# Stable hop settings (do not "fix" back to typical Xray samples):
+#   - inbound sniffing disabled (Telegram fake-TLS / destOverride)
+#   - outbound has no xtls-rprx-vision (mixed MTProto/HTTPS/UDP)
+#   - mux + xudpProxyUDP443=allow (YouTube QUIC, fewer REALITY sockets)
+#   - Caddy reverse_proxy with flush_interval -1 and no read/write timeout
+#
 # Prerequisites:
 #   - Ubuntu/Debian VPS-2 with Caddy TLS for the domain
 #   - Existing wsrelay-server on /ws is optional but supported side-by-side
@@ -170,9 +176,10 @@ EOF
 }
 
 write_xray_config() {
-  local clients_json
+  local clients_json tmp_config
   clients_json="$(preserve_existing_clients)"
   mkdir -p "$CONFIG_DIR"
+  tmp_config="$(mktemp --suffix=.json)"
 
   jq -n \
     --arg listen_host "${LISTEN%:*}" \
@@ -230,11 +237,13 @@ write_xray_config() {
           streamSettings: {
             network: "ws",
             security: "none",
-            wsSettings: { path: $mobile_path }
+            wsSettings: {
+              path: $mobile_path,
+              heartbeatPeriod: 10
+            }
           },
           sniffing: {
-            enabled: true,
-            destOverride: ["http", "tls", "quic"]
+            enabled: false
           }
         }
       ],
@@ -250,12 +259,17 @@ write_xray_config() {
                 users: [
                   {
                     id: $upstream_uuid,
-                    encryption: "none",
-                    flow: "xtls-rprx-vision"
+                    encryption: "none"
                   }
                 ]
               }
             ]
+          },
+          mux: {
+            enabled: true,
+            concurrency: 8,
+            xudpConcurrency: 16,
+            xudpProxyUDP443: "allow"
           },
           streamSettings: {
             network: "raw",
@@ -288,10 +302,11 @@ write_xray_config() {
           }
         ]
       }
-    }' > "$CONFIG_FILE"
+    }' > "$tmp_config"
 
-  chmod 0644 "$CONFIG_FILE"
-  "$XRAY_BIN" run -test -config "$CONFIG_FILE"
+  "$XRAY_BIN" run -test -config "$tmp_config"
+  install -m 0644 "$tmp_config" "$CONFIG_FILE"
+  rm -f "$tmp_config"
   log "Wrote $CONFIG_FILE"
 }
 
@@ -330,25 +345,50 @@ import sys
 caddy_file, domain, public_port, mobile_path, mobile_listen, wsrelay_listen = sys.argv[1:7]
 path = pathlib.Path(caddy_file)
 text = path.read_text(encoding="utf-8")
-site = domain if public_port == "443" else f"https://{domain}:{public_port}"
 
-site_block = f"""{site} {{
-    handle {mobile_path}* {{
-        reverse_proxy {mobile_listen}
-    }}
-    handle /ws* {{
-        reverse_proxy {wsrelay_listen}
-    }}
-    handle {{
-        respond "protocol gateway" 200
-    }}
-}}"""
 
-def find_site_block(source, site):
+def reverse_proxy(addr: str) -> str:
+    return (
+        f"reverse_proxy {addr} {{\n"
+        "            flush_interval -1\n"
+        "            transport http {\n"
+        "                versions 1.1\n"
+        "                read_timeout 0\n"
+        "                write_timeout 0\n"
+        "                dial_timeout 10s\n"
+        "            }\n"
+        "        }"
+    )
+
+
+def site_block(site: str) -> str:
+    return (
+        f"{site} {{\n"
+        f"    handle {mobile_path}* {{\n"
+        f"        {reverse_proxy(mobile_listen)}\n"
+        "    }\n"
+        "    handle /ws* {\n"
+        f"        {reverse_proxy(wsrelay_listen)}\n"
+        "    }\n"
+        "    handle {\n"
+        '        respond "protocol gateway" 200\n'
+        "    }\n"
+        "}"
+    )
+
+
+def find_site_block(source: str, site: str):
     marker = f"{site} {{"
-    start = source.find(marker)
-    if start == -1:
-        return None
+    search_from = 0
+    start = -1
+    while True:
+        start = source.find(marker, search_from)
+        if start == -1:
+            return None
+        if site == domain and start >= 8 and source[start - 8 : start] == "https://":
+            search_from = start + 1
+            continue
+        break
     brace = source.find("{", start)
     if brace == -1:
         return None
@@ -363,15 +403,25 @@ def find_site_block(source, site):
                 return start, index + 1
     raise SystemExit(f"Malformed Caddyfile: unclosed site block for {site}")
 
-block_range = find_site_block(text, site)
-if block_range:
-    start, end = block_range
-    text = text[:start].rstrip() + "\n\n" + site_block + "\n" + text[end:].lstrip()
-else:
-    text = text.rstrip() + "\n\n" + site_block + "\n"
+
+def upsert(source: str, site: str) -> str:
+    block = site_block(site)
+    found = find_site_block(source, site)
+    if found:
+        start, end = found
+        return source[:start].rstrip() + "\n\n" + block + "\n" + source[end:].lstrip()
+    return source.rstrip() + "\n\n" + block + "\n"
+
+
+sites = [domain]
+if public_port != "443":
+    sites.append(f"https://{domain}:{public_port}")
+
+for site in sites:
+    text = upsert(text, site)
+    print(f"Updated Caddy site block for {site}")
 
 path.write_text(text, encoding="utf-8")
-print(f"Updated Caddy site block for {site}")
 PY
 
   systemctl enable --now caddy

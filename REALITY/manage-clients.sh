@@ -4,6 +4,7 @@
 # Usage:
 #   ./manage-clients.sh list
 #   ./manage-clients.sh add [label]       # generates UUID, prints client config
+#   Label universal-gateway* is the VPS-2 hop: no xtls-rprx-vision.
 #   ./manage-clients.sh add-uuid <uuid> [label]
 #   ./manage-clients.sh remove <uuid>
 #   ./manage-clients.sh links          # prints VLESS share links for all clients
@@ -70,26 +71,40 @@ get_server_info() {
   [[ -n "$SHORT_ID" && -n "$SERVER_NAME" ]] || die "REALITY shortIds/serverNames missing in $XRAY_CONFIG"
 }
 
+is_gateway_label() {
+  [[ "${1:-}" == universal-gateway* ]]
+}
+
+install_xray_config() {
+  local tmp="$1"
+  "$XRAY_BIN" run -test -config "$tmp" || { rm -f "$tmp"; die "Config validation failed"; }
+  install -m 0644 "$tmp" "$XRAY_CONFIG"
+  rm -f "$tmp"
+}
+
 # Generate VLESS link for a client
 make_vless_link() {
-  local uuid="$1" label="$2" suffix="${3:-}"
-  local tag="${label:-reality}"
+  local uuid="$1" label="$2" suffix="${3:-}" flow="${4:-}"
+  local tag="${label:-reality}" flow_q=""
   [[ -n "$suffix" ]] && tag="${tag}-${suffix}"
-  printf 'vless://%s@%s:443?encryption=none&flow=xtls-rprx-vision&type=raw&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s#%s' \
-    "$uuid" "$SERVER_IP" "$SERVER_NAME" "$PUBLIC_KEY" "$SHORT_ID" "$tag"
+  if [[ -n "$flow" ]]; then
+    flow_q="&flow=${flow}"
+  fi
+  printf 'vless://%s@%s:443?encryption=none%s&type=raw&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s#%s' \
+    "$uuid" "$SERVER_IP" "$flow_q" "$SERVER_NAME" "$PUBLIC_KEY" "$SHORT_ID" "$tag"
 }
 
 # Save client record to clients.txt log
 save_client_record() {
-  local uuid="$1" label="$2" date_added
+  local uuid="$1" label="$2" flow="${3:-}" date_added
   date_added=$(date '+%Y-%m-%d %H:%M')
 
   get_server_info
   local direct_link cf_link
-  direct_link=$(make_vless_link "$uuid" "$label" "direct")
+  direct_link=$(make_vless_link "$uuid" "$label" "direct" "$flow")
   cf_link=""
   if [[ -n "$WS_RELAY" ]]; then
-    cf_link=$(make_vless_link "$uuid" "$label" "cf")
+    cf_link=$(make_vless_link "$uuid" "$label" "cf" "$flow")
   fi
 
   {
@@ -150,27 +165,33 @@ cmd_add() {
 
   # Use label as email, fallback to uuid prefix
   local email="${label:-${uuid:0:8}}"
+  local flow=""
+  if ! is_gateway_label "$email" && ! is_gateway_label "$label"; then
+    flow="xtls-rprx-vision"
+  fi
 
-  # Add to config
+  local email_exists
+  email_exists=$(jq -r --argjson idx "$idx" --arg email "$email" '
+    .inbounds[$idx].settings.clients // []
+    | map(select(.email == $email)) | .[0].email // empty
+  ' "$XRAY_CONFIG")
+  if [[ -n "$email_exists" ]]; then
+    die "Email '$email' already exists. Use a unique label (Xray rejects duplicate emails)."
+  fi
+
   local tmp
-  tmp=$(mktemp)
-  jq --argjson idx "$idx" --arg uuid "$uuid" --arg email "$email" '
-    .inbounds[$idx].settings.clients = ((.inbounds[$idx].settings.clients // []) + [{
-      "id": $uuid,
-      "flow": "xtls-rprx-vision",
-      "email": $email
-    }])
+  tmp=$(mktemp --suffix=.json)
+  jq --argjson idx "$idx" --arg uuid "$uuid" --arg email "$email" --arg flow "$flow" '
+    .inbounds[$idx].settings.clients = ((.inbounds[$idx].settings.clients // []) + [
+      (if $flow == "" then {id: $uuid, email: $email} else {id: $uuid, flow: $flow, email: $email} end)
+    ])
   ' "$XRAY_CONFIG" > "$tmp"
-  mv "$tmp" "$XRAY_CONFIG"
-  chmod 0644 "$XRAY_CONFIG"
+  install_xray_config "$tmp"
 
   # Save label
   if [[ -n "$label" ]]; then
     echo "${uuid}=${label}" >> "$LABELS_FILE"
   fi
-
-  # Validate
-  "$XRAY_BIN" run -test -config "$XRAY_CONFIG" || die "Config validation failed!"
 
   # Restart
   systemctl restart xray
@@ -182,7 +203,7 @@ cmd_add() {
   printf 'Address:    %s\n' "$SERVER_IP"
   printf 'Port:       443\n'
   printf 'UUID:       %s\n' "$uuid"
-  printf 'Flow:       xtls-rprx-vision\n'
+  printf 'Flow:       %s\n' "${flow:-<none, gateway hop>}"
   printf 'Encryption: none\n'
   printf 'Network:    raw\n'
   printf 'Security:   reality\n'
@@ -196,18 +217,18 @@ cmd_add() {
 
   # Print VLESS share links
   local direct_link
-  direct_link=$(make_vless_link "$uuid" "$label" "direct")
+  direct_link=$(make_vless_link "$uuid" "$label" "direct" "$flow")
   printf '\n--- VLESS links ---\n'
   printf 'Direct:     %s\n' "$direct_link"
   if [[ -n "$WS_RELAY" ]]; then
     local cf_link
-    cf_link=$(make_vless_link "$uuid" "$label" "cf")
+    cf_link=$(make_vless_link "$uuid" "$label" "cf" "$flow")
     printf 'Cloudflare: %s\n' "$cf_link"
     printf '  (add "wsRelay": "%s" to realitySettings)\n' "$WS_RELAY"
   fi
 
   # Save to clients log
-  save_client_record "$uuid" "$label"
+  save_client_record "$uuid" "$label" "$flow"
   log "Client saved to $CLIENTS_LOG"
 }
 
@@ -234,19 +255,17 @@ cmd_remove() {
 
   log "Removing client: $uuid"
   local tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp --suffix=.json)
   jq --argjson idx "$idx" --arg uuid "$uuid" '
     .inbounds[$idx].settings.clients |= map(select(.id != $uuid))
   ' "$XRAY_CONFIG" > "$tmp"
-  mv "$tmp" "$XRAY_CONFIG"
-  chmod 0644 "$XRAY_CONFIG"
+  install_xray_config "$tmp"
 
   # Remove label
   if [[ -f "$LABELS_FILE" ]]; then
     sed -i "/^${uuid}=/d" "$LABELS_FILE"
   fi
 
-  "$XRAY_BIN" run -test -config "$XRAY_CONFIG" || die "Config validation failed!"
   systemctl restart xray
   log "Client removed, Xray restarted"
 }
@@ -264,10 +283,12 @@ cmd_links() {
       label=$(grep "^${uuid}=" "$LABELS_FILE" 2>/dev/null | cut -d= -f2- || true)
     fi
     local tag="${label:-${uuid:0:8}}"
+    local flow
+    flow=$(jq -r --argjson idx "$idx" --argjson i "$i" '.inbounds[$idx].settings.clients[$i].flow // ""' "$XRAY_CONFIG")
     printf '\n[%s]\n' "$tag"
-    printf '  Direct:     %s\n' "$(make_vless_link "$uuid" "$label" "direct")"
+    printf '  Direct:     %s\n' "$(make_vless_link "$uuid" "$label" "direct" "$flow")"
     if [[ -n "$WS_RELAY" ]]; then
-      printf '  Cloudflare: %s\n' "$(make_vless_link "$uuid" "$label" "cf")"
+      printf '  Cloudflare: %s\n' "$(make_vless_link "$uuid" "$label" "cf" "$flow")"
     fi
   done
   printf '\nTotal: %d client(s)\n' "$count"

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# deploy_vps.sh — First-time VPS setup or update for Xray REALITY.
+# deploy_vps.sh — First-time VPS setup or update for Xray REALITY (egress / VPS-1).
+#
+# Sniffing destOverride is disabled: Telegram fake-TLS SNI must not be rewritten.
 #
 # First-time install (as root):
 #   DEPLOY_USER_PASSWORD='YourPass!' bash deploy_vps.sh
@@ -345,12 +347,7 @@ sudo tee "$XRAY_CONFIG_FILE" > /dev/null <<EOF
         }
       },
       "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
+        "enabled": false
       }
     }
   ],

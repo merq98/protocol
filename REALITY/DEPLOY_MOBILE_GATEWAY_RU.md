@@ -4,16 +4,21 @@
 
 В этом режиме Windows больше не требует кастомный `xray.exe` и `wsrelay.txt` как основной путь.
 
+Полная схема, порты, MTProto и причины настроек — в [README.md](../README.md) в корне репозитория.
+
 ## Схема
 
 ```text
 Windows v2rayN / iOS Happ Plus
   -> VLESS + WebSocket + TLS
-  -> https://mythicquality.com:9443/universal
-VPS-2 (Caddy TLS + Xray universal inbound)
-  -> VLESS + REALITY
-  -> 37.220.83.19:443
-VPS-1 (Xray REALITY)
+  -> https://<DOMAIN>:9443/universal
+VPS-2 Caddy -> 127.0.0.1:10081 xray-mobile-gateway
+  sniffing off, WS heartbeat 10s
+  outbound REALITY без Vision, mux + UDP 443 allow
+  -> <VPS1>:443
+VPS-1 Xray REALITY
+  email universal-gateway* без flow
+  sniffing destOverride выключен
   -> Internet
 ```
 
@@ -41,11 +46,11 @@ Assumption: в базовом варианте VPS-1 видит весь univers
 
 ## 1. Создать upstream-клиента на VPS-1
 
-На VPS-1:
+На VPS-1. Label **должен** начинаться с `universal-gateway`: скрипт тогда не ставит `xtls-rprx-vision`. Этот hop гоняет MTProto и UDP, Vision его клинит.
 
 ```bash
 cd ~/protocol/REALITY
-sudo ./manage-clients.sh add universal-gateway
+sudo ./manage-clients.sh add universal-gateway-fr
 ```
 
 Из вывода сохрани:
@@ -85,9 +90,10 @@ sudo ./deploy-mobile-gateway-vps.sh install \
 - установит `xray`, если его ещё нет;
 - создаст `/usr/local/etc/xray-mobile/config.json`;
 - поднимет `xray-mobile-gateway` на `127.0.0.1:10081`;
-- обновит Caddy: `/universal*` -> Xray, `/ws*` -> `wsrelay-server`;
+- обновит Caddy (`443` и `:9443`): `/universal*` -> Xray, `/ws*` -> `wsrelay-server`, длинный WebSocket (`flush_interval -1`, без read/write timeout);
+- выключит sniffing destOverride, не поставит Vision на outbound, включит mux и `xudpProxyUDP443=allow`;
 - включит Xray Stats API на `127.0.0.1:10086`;
-- не трогает `wsrelay-server` и Windows `/ws`.
+- не трогает `wsrelay-server` процесс. Windows `/ws` остаётся.
 
 ## 3. Создать ссылки для клиентов
 
@@ -160,8 +166,11 @@ sudo systemctl reload caddy
 
 ## 7. Файлы в репозитории
 
+- [README.md](../README.md) — схема, порты, нюансы, переезд
 - `REALITY/deploy-mobile-gateway-vps.sh` — установка Xray gateway на VPS-2
 - `REALITY/manage-mobile-clients.sh` — UUID и universal VLESS WS TLS ссылки
 - `REALITY/check-universal-traffic.sh` — трафик по клиентам на VPS-2
-- `REALITY/deploy-wsrelay-vps.sh` — Windows raw relay, не меняется
+- `REALITY/deploy-wsrelay-vps.sh` — Windows raw relay `/ws`
+- `REALITY/deploy_vps.sh` — конечный REALITY на VPS-1
+- `REALITY/manage-clients.sh` — клиенты VPS-1; `universal-gateway*` без Vision
 - `REALITY/DEPLOY_SELF_HOSTED_WS_RELAY_RU.md` — Windows `/ws` схема
