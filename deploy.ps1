@@ -19,17 +19,23 @@
 .PARAMETER SkipClient
   Skip Windows client build.
 
+.PARAMETER Service
+  systemd unit to restart after install. Default: xray (VPS-1).
+  For the France gateway: xray-mobile-gateway.
+
 .PARAMETER V2rayNPath
   Path to v2rayN's xray.exe to replace. If set, copies the new xray.exe there.
 
 .EXAMPLE
   .\deploy.ps1
   .\deploy.ps1 -SkipClient
+  .\deploy.ps1 -SkipClient -ServerHost merq@89.208.113.41 -Service xray-mobile-gateway
   .\deploy.ps1 -V2rayNPath "$env:LOCALAPPDATA\v2rayN\bin\Xray\xray.exe"
 #>
 param(
     [string]$ServerHost = "merq@45.144.30.147",
     [int]$ServerPort = 22,
+    [string]$Service = "xray",
     [switch]$SkipServer,
     [switch]$SkipClient,
     [string]$V2rayNPath
@@ -100,16 +106,16 @@ if (-not $SkipServer) {
     scp -P $ServerPort $LinuxBin "${ServerHost}:/tmp/xray"
     if ($LASTEXITCODE -ne 0) { throw "SCP failed" }
 
-    Write-Step "Installing and restarting on server"
+    Write-Step "Installing and restarting $Service on $ServerHost"
     ssh -p $ServerPort $ServerHost @"
 set -e
 sudo install -m 0755 /tmp/xray /usr/local/bin/xray
 /usr/local/bin/xray version
-sudo systemctl restart xray
+sudo systemctl restart $Service
 sleep 1
-sudo systemctl is-active xray
+sudo systemctl is-active $Service
 echo '--- Last 5 log lines ---'
-sudo journalctl -u xray -n 5 --no-pager
+sudo journalctl -u $Service -n 5 --no-pager
 "@
     if ($LASTEXITCODE -ne 0) { throw "Remote deploy failed" }
 }

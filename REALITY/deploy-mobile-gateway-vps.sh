@@ -8,6 +8,7 @@
 #   - inbound sniffing disabled (Telegram fake-TLS / destOverride)
 #   - outbound has no xtls-rprx-vision (mixed MTProto/HTTPS/UDP)
 #   - mux + xudpProxyUDP443=allow (YouTube QUIC, fewer REALITY sockets)
+#   - mux.maxLifetime=180 so hop workers retire; hard close at 2x
 #   - Caddy reverse_proxy with flush_interval -1 and no read/write timeout
 #
 # Prerequisites:
@@ -44,6 +45,9 @@ GATEWAY_ENV="${GATEWAY_ENV:-$CONFIG_DIR/gateway.env}"
 LABELS_FILE="${LABELS_FILE:-$CONFIG_DIR/client-labels.txt}"
 SERVICE_NAME="${SERVICE_NAME:-xray-mobile-gateway}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+HOP_HEALTH_BIN="${HOP_HEALTH_BIN:-/usr/local/sbin/check-hop-health.sh}"
+HOP_HEALTH_SERVICE_FILE="/etc/systemd/system/check-hop-health.service"
+HOP_HEALTH_TIMER_FILE="/etc/systemd/system/check-hop-health.timer"
 CADDY_FILE="${CADDY_FILE:-/etc/caddy/Caddyfile}"
 WSRELAY_LISTEN="${WSRELAY_LISTEN:-127.0.0.1:10080}"
 XRAY_API_LISTEN="${XRAY_API_LISTEN:-127.0.0.1:10086}"
@@ -269,7 +273,8 @@ write_xray_config() {
             enabled: true,
             concurrency: 8,
             xudpConcurrency: 16,
-            xudpProxyUDP443: "allow"
+            xudpProxyUDP443: "allow",
+            maxLifetime: 180
           },
           streamSettings: {
             network: "raw",
@@ -332,6 +337,43 @@ EOF
   systemctl enable --now "$SERVICE_NAME"
   systemctl restart "$SERVICE_NAME"
   systemctl status "$SERVICE_NAME" --no-pager
+}
+
+write_hop_watchdog() {
+  if [[ ! -f "$SCRIPT_DIR/check-hop-health.sh" ]]; then
+    log "check-hop-health.sh missing, skip hop watchdog"
+    return
+  fi
+  install -m 0755 "$SCRIPT_DIR/check-hop-health.sh" "$HOP_HEALTH_BIN"
+  mkdir -p /var/lib/xray-mobile
+
+  cat > "$HOP_HEALTH_SERVICE_FILE" <<EOF
+[Unit]
+Description=Xray mobile gateway hop health check
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$HOP_HEALTH_BIN check
+EOF
+
+  cat > "$HOP_HEALTH_TIMER_FILE" <<'EOF'
+[Unit]
+Description=Run hop health check every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now check-hop-health.timer
+  log "Enabled check-hop-health.timer"
 }
 
 update_caddy_routes() {
@@ -447,6 +489,7 @@ cmd_install() {
   write_gateway_env
   write_xray_config
   write_systemd_unit
+  write_hop_watchdog
   update_caddy_routes
   if [[ -x "$SCRIPT_DIR/tune-tcp-queue.sh" ]]; then
     "$SCRIPT_DIR/tune-tcp-queue.sh" apply
@@ -464,6 +507,7 @@ cmd_install() {
 
 cmd_status() {
   systemctl status "$SERVICE_NAME" --no-pager || true
+  systemctl status check-hop-health.timer --no-pager || true
   systemctl status wsrelay-server --no-pager || true
   systemctl status caddy --no-pager || true
   ss -lntp | grep -E '(:443|:10080|:10081|:10086)' || true
@@ -475,9 +519,10 @@ cmd_status() {
 cmd_uninstall() {
   require_root
   systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
-  rm -f "$SERVICE_FILE"
+  systemctl disable --now check-hop-health.timer 2>/dev/null || true
+  rm -f "$SERVICE_FILE" "$HOP_HEALTH_SERVICE_FILE" "$HOP_HEALTH_TIMER_FILE"
   systemctl daemon-reload
-  log "Removed $SERVICE_NAME"
+  log "Removed $SERVICE_NAME and hop watchdog"
   log "Caddy routes and $CONFIG_DIR were left intact for manual cleanup"
 }
 

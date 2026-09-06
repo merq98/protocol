@@ -95,13 +95,18 @@ Outbound `proxy` на VPS-2 тоже **без** `xtls-rprx-vision`.
   "enabled": true,
   "concurrency": 8,
   "xudpConcurrency": 16,
-  "xudpProxyUDP443": "allow"
+  "xudpProxyUDP443": "allow",
+  "maxLifetime": 180
 }
 ```
 
 Почему: Happ TUN без mux открывает новый REALITY на каждый TCP. Набиралось 70+ туннелей, живые сессии тонули. Mux сжимает hop до нескольких сокетов.
 
+`maxLifetime` (секунды) уводит воркер в отставку: новые сессии он больше не берёт, текущие доигрывает, TCP закрывается когда сессий 0. Жёсткий потолок — 2× (6 мин), если Send-Q залип. `0` — старое поведение, без возраста. Поле нужно на шлюзе; на VPS-1 не ставить.
+
 `xudpProxyUDP443` должен быть `allow`. Значение `reject` режет YouTube QUIC (UDP 443).
+
+На VPS-2 `check-hop-health.sh` (systemd timer каждые 2 мин) рестартит только `xray-mobile-gateway`, и только если hop мёртвый: юнит не active, или клиенты на `:9443` при нуле ESTAB на VPS-1:443 два цикла подряд, или сумма Send-Q hop > 200 KB два цикла подряд. Пауза между рестартами — 45 мин. Просадка Instagram, число WS, cubic и load сами по себе рестарт не вызывают. Германию и Caddy сторож не трогает.
 
 ### 4. Caddy: длинный WebSocket
 
@@ -209,7 +214,7 @@ sudo ./deploy-mobile-gateway-vps.sh install \
   --short-id '<REALITY_SHORT_ID>'
 ```
 
-Скрипт сам ставит: sniffing off, без Vision на outbound, mux + UDP 443, heartbeat WS, Caddy с длинным `reverse_proxy`.
+Скрипт сам ставит: sniffing off, без Vision на outbound, mux + UDP 443 + `maxLifetime` 180, heartbeat WS, Caddy с длинным `reverse_proxy`, сторож hop.
 
 Открой firewall: TCP `80`, `443`, `9443`, при MTProto ещё `8443`; UDP WireGuard `51821` только с IP парного VPS.
 
@@ -232,7 +237,7 @@ curl -I --max-time 15 "https://<DOMAIN>:9443/universal"
 sudo ss -tnp | grep ESTAB | grep '<VPS1_IP>:443'
 ```
 
-На hop к VPS-1 должно быть несколько сокетов и в основном `Send-Q 0`. Пачка `Send-Q` 400–500 — снова клинч Vision/mux.
+На hop к VPS-1 должно быть несколько сокетов и в основном `Send-Q 0`. Возраст/inode сокетов меняется в пределах ~3–6 мин (`maxLifetime` 180, потолок 2×). Пачка `Send-Q` 400–500 — снова клинч Vision/mux. Многочасовые hop без смены inode — старый бинарь без ротации.
 
 На VPS-1 после включения VPN на телефоне:
 
@@ -262,7 +267,8 @@ sudo journalctl -u xray --since "1 min ago" --no-pager -l | grep universal-gatew
 | `REALITY/manage-clients.sh` | клиенты VPS-1; `universal-gateway*` без flow |
 | `REALITY/deploy-wsrelay-vps.sh` | VPS-2: Caddy + `/ws` |
 | `REALITY/deploy-mobile-gateway-vps.sh` | VPS-2: `/universal` gateway |
-| `REALITY/tune-tcp-queue.sh` | VPS-2: BBR + fq на публичном NIC |
+| `REALITY/check-hop-health.sh` | VPS-2: сторож залипшего hop, пауза 45 мин |
+| `REALITY/tune-tcp-queue.sh` | VPS-1/VPS-2: BBR + fq на публичном NIC |
 | `REALITY/manage-mobile-clients.sh` | UUID и ссылки клиентов на VPS-2 |
 | `REALITY/deploy-mtproto-two-vps.sh` | MTProto два VPS |
 | `REALITY/check-universal-traffic.sh` | трафик клиентов шлюза |
