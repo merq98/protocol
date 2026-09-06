@@ -68,4 +68,7 @@ message MultiplexingConfig {
   int32 xudpConcurrency = 3;
   // "reject" (default), "allow" or "skip".
   string xudpProxyUDP443 = 4;
+  // Stop accepting new mux sessions after this many seconds. 0 keeps the
+  // worker until it is idle. Workers are force-closed at 2x this value.
+  int32 max_lifetime = 5;
 }

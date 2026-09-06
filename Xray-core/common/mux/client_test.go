@@ -114,3 +114,72 @@ func TestClientWorkerClose(t *testing.T) {
 
 	common.Must(w2.Close())
 }
+
+func TestClientWorkerLifetimeExpires(t *testing.T) {
+	reader, writer := pipe.New(pipe.WithoutSizeLimit())
+	defer writer.Close()
+
+	worker, err := mux.NewClientWorker(transport.Link{Reader: reader, Writer: writer}, mux.ClientStrategy{
+		MaxLifetime: time.Millisecond,
+	})
+	common.Must(err)
+
+	time.Sleep(time.Millisecond * 20)
+
+	if worker.Dispatch(context.Background(), nil) {
+		t.Fatal("expected Dispatch to fail after maxLifetime")
+	}
+	if worker.Closed() {
+		t.Fatal("expired worker should keep serving existing sessions until idle or Close")
+	}
+
+	common.Must(worker.Close())
+	time.Sleep(time.Millisecond * 50)
+	if !worker.Closed() {
+		t.Fatal("expected worker closed after Close")
+	}
+}
+
+func TestClientWorkerLifetimeZeroDoesNotExpire(t *testing.T) {
+	reader, writer := pipe.New(pipe.WithoutSizeLimit())
+	defer writer.Close()
+
+	worker, err := mux.NewClientWorker(transport.Link{Reader: reader, Writer: writer}, mux.ClientStrategy{
+		MaxLifetime: 0,
+	})
+	common.Must(err)
+	defer worker.Close()
+
+	time.Sleep(time.Millisecond * 20)
+
+	tr, tw := pipe.New(pipe.WithoutSizeLimit())
+	defer tw.Close()
+	ctx := session.ContextWithOutbounds(context.Background(), []*session.Outbound{{
+		Target: net.TCPDestination(net.DomainAddress("www.example.com"), 80),
+	}})
+	if !worker.Dispatch(ctx, &transport.Link{Reader: tr, Writer: tw}) {
+		t.Fatal("maxLifetime=0 must keep accepting sessions")
+	}
+	if worker.Closed() {
+		t.Fatal("maxLifetime=0 worker should not close from age")
+	}
+}
+
+func TestClientWorkerIdleAfterLifetimeCloses(t *testing.T) {
+	reader, writer := pipe.New(pipe.WithoutSizeLimit())
+	defer writer.Close()
+
+	worker, err := mux.NewClientWorker(transport.Link{Reader: reader, Writer: writer}, mux.ClientStrategy{
+		MaxLifetime: time.Millisecond,
+	})
+	common.Must(err)
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		if worker.Closed() {
+			return
+		}
+		time.Sleep(time.Millisecond * 200)
+	}
+	t.Fatal("expired idle worker was not closed by monitor")
+}

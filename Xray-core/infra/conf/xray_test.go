@@ -187,6 +187,13 @@ func TestMuxConfig_Build(t *testing.T) {
 			XudpConcurrency: 0,
 			XudpProxyUDP443: "reject",
 		}},
+		{"lifetime", `{"enabled": true, "concurrency": 8, "maxLifetime": 180}`, &proxyman.MultiplexingConfig{
+			Enabled:         true,
+			Concurrency:     8,
+			XudpConcurrency: 0,
+			XudpProxyUDP443: "reject",
+			MaxLifetime:     180,
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

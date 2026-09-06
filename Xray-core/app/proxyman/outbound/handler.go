@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"time"
 
 	"github.com/xtls/xray-core/common/dice"
 
@@ -137,6 +138,7 @@ func NewHandler(ctx context.Context, config *core.OutboundHandlerConfig) (outbou
 							Strategy: mux.ClientStrategy{
 								MaxConcurrency: uint32(config.Concurrency),
 								MaxConnection:  128,
+								MaxLifetime:    time.Duration(config.MaxLifetime) * time.Second,
 							},
 						},
 					},
@@ -158,6 +160,7 @@ func NewHandler(ctx context.Context, config *core.OutboundHandlerConfig) (outbou
 							Strategy: mux.ClientStrategy{
 								MaxConcurrency: uint32(config.XudpConcurrency),
 								MaxConnection:  128,
+								MaxLifetime:    time.Duration(config.MaxLifetime) * time.Second,
 							},
 						},
 					},

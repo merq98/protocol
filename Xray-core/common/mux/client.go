@@ -171,6 +171,7 @@ func (f *DialingWorkerFactory) Create() (*ClientWorker, error) {
 type ClientStrategy struct {
 	MaxConcurrency uint32
 	MaxConnection  uint32
+	MaxLifetime    time.Duration
 }
 
 type ClientWorker struct {
@@ -179,6 +180,7 @@ type ClientWorker struct {
 	done           *done.Instance
 	timer          *time.Ticker
 	strategy       ClientStrategy
+	created        time.Time
 }
 
 var (
@@ -194,6 +196,7 @@ func NewClientWorker(stream transport.Link, s ClientStrategy) (*ClientWorker, er
 		done:           done.New(),
 		timer:          time.NewTicker(time.Second * 16),
 		strategy:       s,
+		created:        time.Now(),
 	}
 
 	go c.fetchOutput()
@@ -236,6 +239,14 @@ func (m *ClientWorker) monitor() {
 			common.Interrupt(m.link.Reader)
 			return
 		case <-m.timer.C:
+			if m.pastHardLifetime() {
+				common.Must(m.done.Close())
+				continue
+			}
+			if m.expired() && m.sessionManager.Size() == 0 {
+				common.Must(m.done.Close())
+				continue
+			}
 			if m.sessionManager.CloseIfNoSessionAndIdle(checkSize, checkCount) {
 				common.Must(m.done.Close())
 			}
@@ -286,7 +297,18 @@ func fetchInput(ctx context.Context, s *Session, output buf.Writer) {
 	}
 }
 
+func (m *ClientWorker) expired() bool {
+	return m.strategy.MaxLifetime > 0 && time.Since(m.created) >= m.strategy.MaxLifetime
+}
+
+func (m *ClientWorker) pastHardLifetime() bool {
+	return m.strategy.MaxLifetime > 0 && time.Since(m.created) >= 2*m.strategy.MaxLifetime
+}
+
 func (m *ClientWorker) IsClosing() bool {
+	if m.expired() {
+		return true
+	}
 	sm := m.sessionManager
 	if m.strategy.MaxConnection > 0 && sm.Count() >= int(m.strategy.MaxConnection) {
 		return true
@@ -297,7 +319,7 @@ func (m *ClientWorker) IsClosing() bool {
 // IsFull returns true if this ClientWorker is unable to accept more connections.
 // it might be because it is closing, or the number of connections has reached the limit.
 func (m *ClientWorker) IsFull() bool {
-	if m.IsClosing() || m.Closed() {
+	if m.IsClosing() || m.Closed() || m.pastHardLifetime() {
 		return true
 	}
 
