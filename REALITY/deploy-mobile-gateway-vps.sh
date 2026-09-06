@@ -448,6 +448,9 @@ cmd_install() {
   write_xray_config
   write_systemd_unit
   update_caddy_routes
+  if [[ -x "$SCRIPT_DIR/tune-tcp-queue.sh" ]]; then
+    "$SCRIPT_DIR/tune-tcp-queue.sh" apply
+  fi
 
   log "Universal gateway installed"
   printf '\nNext:\n'

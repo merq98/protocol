@@ -262,6 +262,7 @@ sudo journalctl -u xray --since "1 min ago" --no-pager -l | grep universal-gatew
 | `REALITY/manage-clients.sh` | клиенты VPS-1; `universal-gateway*` без flow |
 | `REALITY/deploy-wsrelay-vps.sh` | VPS-2: Caddy + `/ws` |
 | `REALITY/deploy-mobile-gateway-vps.sh` | VPS-2: `/universal` gateway |
+| `REALITY/tune-tcp-queue.sh` | VPS-2: BBR + fq на публичном NIC |
 | `REALITY/manage-mobile-clients.sh` | UUID и ссылки клиентов на VPS-2 |
 | `REALITY/deploy-mtproto-two-vps.sh` | MTProto два VPS |
 | `REALITY/check-universal-traffic.sh` | трафик клиентов шлюза |
