@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tune-tcp-queue.sh — BBR + fq on the public NIC (VPS-2 gateway).
+# tune-tcp-queue.sh — BBR + fq on the public NIC (VPS-1 egress and VPS-2 gateway).
 #
 # BBR needs fq for pacing. fq_codel in default_qdisc is not enough:
 # virtio/netplan often leaves the live NIC on pfifo_fast.

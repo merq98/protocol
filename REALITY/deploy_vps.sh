@@ -402,6 +402,11 @@ sudo systemctl enable xray
 sudo systemctl restart xray
 sudo systemctl status xray --no-pager
 
+TUNE_TCP="$(cd "$(dirname "$0")" && pwd)/tune-tcp-queue.sh"
+if [[ -x "$TUNE_TCP" ]]; then
+  sudo "$TUNE_TCP" apply
+fi
+
 log "Saving generated values"
 umask 077
 mkdir -p "$OUTPUT_DIR"
